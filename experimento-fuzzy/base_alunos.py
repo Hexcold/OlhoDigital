@@ -1,61 +1,48 @@
 from openpyxl import load_workbook
 from collections import Counter
 
-CAMINHO = "dados/filter_hc_student.xlsx"
 
-wb = load_workbook(CAMINHO, read_only=True, data_only=True)
-print("Abas encontradas:", wb.sheetnames)
+def carregar_base(caminho: str, apenas_ativos: bool = False) -> list[dict]:
+    """Lê a aba 'students' e retorna [{'matricula', 'nome', 'status'}, ...].
+    Descarta registros sem matrícula ou nome; remove matrículas duplicadas
+    mantendo a primeira ocorrência."""
+    wb = load_workbook(caminho, read_only=True, data_only=True)
+    ws = wb["students"]
 
-ws = wb["students"]
+    alunos = []
+    vistas = set()
 
-alunos = []
+    for linha in ws.iter_rows(min_row=2, values_only=True):
+        matricula_bruta = linha[0]
+        nome = linha[1]
+        status = linha[3]
 
-for linha in ws.iter_rows(min_row=2, values_only=True):
-    matricula_bruta = linha[0]
-    nome = linha[1]
-    status = linha[3]
-        
-    if matricula_bruta is None or nome is None:
-        print("Linha descartada pela guarda:", linha)
-        continue
-        
-    matricula = str(int(matricula_bruta))
-        
-    alunos.append({"matricula": matricula, "nome": nome, "status": status})
-        
-print("Total de alunos carregados:", len(alunos))
-print("Primeiros 3:")
-for aluno in alunos[:3]:
-    print(" ", aluno)
+        if matricula_bruta is None or nome is None:
+            continue
 
-for a in alunos:
-    if len(a["matricula"]) != 6:
-        print("Matrícula fora do padrão:", a)
-    
-print("\n--- PROFILING ---")
+        if apenas_ativos and status != "ATIVO":
+            continue
 
-tamanhos = Counter(len(a["matricula"]) for a in alunos)
-print("Tamanho de matriculas:", dict(tamanhos))
+        matricula = str(int(matricula_bruta))
 
-matriculas = [a["matricula"] for a in alunos]
-print("Matriculas duplicadas:", len(matriculas) - len(set(matriculas)))
+        if matricula in vistas:
+            continue
+        vistas.add(matricula)
 
-estranhos = set()
-for a in alunos:
-    for ch in a["nome"]:
-        if not ("A" <= ch <= "Z" or ch == " "):
-            estranhos.add(ch)
-            
-print("Caracteres fora A-Z/espaço:", estranhos)
-    
-print("Status:", dict(Counter(a["status"] for a in alunos)))
+        alunos.append({"matricula": matricula, "nome": nome, "status": status})
 
-contagem = Counter(matriculas)
-for mat, vezes in contagem.items():
-    if vezes > 1:
-        print("Matricula repetidas:", mat, f"({vezes}x)")
-        for a in alunos:
-            if a["matricula"] == mat:
-                print(" ", a["nome"], "|", a["status"])
-            
-            
+    return alunos
+
+
+if __name__ == "__main__":
+    alunos = carregar_base("dados/filter_hc_student.xlsx")
+    print("Total (base completa):", len(alunos))
+
+    tamanhos = Counter(len(a["matricula"]) for a in alunos)
+    print("Tamanhos de matrícula:", dict(tamanhos))
+
+    matriculas = [a["matricula"] for a in alunos]
+    print("Duplicadas após dedup (deve ser 0):", len(matriculas) - len(set(matriculas)))
+
+    ativos = carregar_base("dados/filter_hc_student.xlsx", apenas_ativos=True)
+    print("Total (apenas ATIVO):", len(ativos))
