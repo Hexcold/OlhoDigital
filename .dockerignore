@@ -1,0 +1,16 @@
+# Lista de permissão: tudo fica fora, e só entra o que a imagem precisa. Assim
+# nenhuma folha, base de alunos ou nota de trabalho vai parar numa imagem, mesmo
+# que um arquivo novo apareça em uma pasta nova.
+*
+!api
+!docker
+!requirements.txt
+!experimento-fuzzy/*.py
+!experimento-imagem/*.py
+!experimento-imagem/cabecalho.json
+!experimento-imagem/modelo/cnn_emnist_maiusculas_28x28.keras
+!experimento-imagem/modelo/cnn_mnist_28x28.keras
+!web
+**/__pycache__
+web/node_modules
+web/dist

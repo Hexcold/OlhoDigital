@@ -1,0 +1,66 @@
+keras 3.15.1 | backend torch
+CUDA: True (NVIDIA GeForce RTX 4050 Laptop GPU)
+campo=nome | 151166 treino, 37792 validação, 26 classes | augmentation=sim
+Epoch 1/30
+4724/4724 - 95s - 20ms/step - accuracy: 0.8465 - loss: 0.5308 - val_accuracy: 0.9644 - val_loss: 0.1621 - learning_rate: 0.0010
+Epoch 2/30
+4724/4724 - 94s - 20ms/step - accuracy: 0.9323 - loss: 0.2466 - val_accuracy: 0.9724 - val_loss: 0.1094 - learning_rate: 0.0010
+Epoch 3/30
+4724/4724 - 105s - 22ms/step - accuracy: 0.9473 - loss: 0.1956 - val_accuracy: 0.9743 - val_loss: 0.1007 - learning_rate: 0.0010
+Epoch 4/30
+4724/4724 - 98s - 21ms/step - accuracy: 0.9552 - loss: 0.1691 - val_accuracy: 0.9773 - val_loss: 0.1030 - learning_rate: 0.0010
+Epoch 5/30
+4724/4724 - 106s - 22ms/step - accuracy: 0.9591 - loss: 0.1538 - val_accuracy: 0.9798 - val_loss: 0.0828 - learning_rate: 0.0010
+Epoch 6/30
+4724/4724 - 106s - 22ms/step - accuracy: 0.9642 - loss: 0.1364 - val_accuracy: 0.9797 - val_loss: 0.0842 - learning_rate: 0.0010
+Epoch 7/30
+4724/4724 - 103s - 22ms/step - accuracy: 0.9663 - loss: 0.1290 - val_accuracy: 0.9803 - val_loss: 0.0849 - learning_rate: 0.0010
+Epoch 8/30
+4724/4724 - 100s - 21ms/step - accuracy: 0.9677 - loss: 0.1228 - val_accuracy: 0.9821 - val_loss: 0.0755 - learning_rate: 0.0010
+Epoch 9/30
+4724/4724 - 102s - 22ms/step - accuracy: 0.9697 - loss: 0.1150 - val_accuracy: 0.9828 - val_loss: 0.0746 - learning_rate: 0.0010
+Epoch 10/30
+4724/4724 - 59s - 13ms/step - accuracy: 0.9706 - loss: 0.1115 - val_accuracy: 0.9825 - val_loss: 0.0746 - learning_rate: 0.0010
+Epoch 11/30
+4724/4724 - 59s - 13ms/step - accuracy: 0.9725 - loss: 0.1073 - val_accuracy: 0.9814 - val_loss: 0.0817 - learning_rate: 0.0010
+Epoch 12/30
+
+Epoch 12: ReduceLROnPlateau reducing learning rate to 0.0005000000237487257.
+4724/4724 - 59s - 12ms/step - accuracy: 0.9724 - loss: 0.1058 - val_accuracy: 0.9807 - val_loss: 0.0770 - learning_rate: 0.0010
+Epoch 13/30
+4724/4724 - 60s - 13ms/step - accuracy: 0.9764 - loss: 0.0913 - val_accuracy: 0.9844 - val_loss: 0.0705 - learning_rate: 5.0000e-04
+Epoch 14/30
+4724/4724 - 60s - 13ms/step - accuracy: 0.9775 - loss: 0.0861 - val_accuracy: 0.9849 - val_loss: 0.0672 - learning_rate: 5.0000e-04
+Epoch 15/30
+4724/4724 - 82s - 17ms/step - accuracy: 0.9779 - loss: 0.0849 - val_accuracy: 0.9841 - val_loss: 0.0663 - learning_rate: 5.0000e-04
+Epoch 16/30
+4724/4724 - 102s - 22ms/step - accuracy: 0.9787 - loss: 0.0824 - val_accuracy: 0.9843 - val_loss: 0.0668 - learning_rate: 5.0000e-04
+Epoch 17/30
+4724/4724 - 104s - 22ms/step - accuracy: 0.9784 - loss: 0.0833 - val_accuracy: 0.9833 - val_loss: 0.0702 - learning_rate: 5.0000e-04
+Epoch 18/30
+
+Epoch 18: ReduceLROnPlateau reducing learning rate to 0.0002500000118743628.
+4724/4724 - 103s - 22ms/step - accuracy: 0.9796 - loss: 0.0809 - val_accuracy: 0.9857 - val_loss: 0.0674 - learning_rate: 5.0000e-04
+Epoch 19/30
+4724/4724 - 105s - 22ms/step - accuracy: 0.9807 - loss: 0.0743 - val_accuracy: 0.9861 - val_loss: 0.0638 - learning_rate: 2.5000e-04
+Epoch 20/30
+4724/4724 - 104s - 22ms/step - accuracy: 0.9812 - loss: 0.0715 - val_accuracy: 0.9855 - val_loss: 0.0648 - learning_rate: 2.5000e-04
+Epoch 21/30
+4724/4724 - 96s - 20ms/step - accuracy: 0.9818 - loss: 0.0718 - val_accuracy: 0.9859 - val_loss: 0.0624 - learning_rate: 2.5000e-04
+Epoch 22/30
+4724/4724 - 97s - 20ms/step - accuracy: 0.9813 - loss: 0.0709 - val_accuracy: 0.9854 - val_loss: 0.0678 - learning_rate: 2.5000e-04
+Epoch 23/30
+4724/4724 - 107s - 23ms/step - accuracy: 0.9820 - loss: 0.0705 - val_accuracy: 0.9856 - val_loss: 0.0635 - learning_rate: 2.5000e-04
+Epoch 24/30
+4724/4724 - 102s - 22ms/step - accuracy: 0.9817 - loss: 0.0700 - val_accuracy: 0.9860 - val_loss: 0.0620 - learning_rate: 2.5000e-04
+Epoch 24: early stopping
+Restoring model weights from the end of the best epoch: 19.
+histórico por época em modelo/log_cnn_nome.csv
+
+holdout 0.9861 em 24 épocas (0:36:46.297050)
+parâmetros: 457,370
+predição: 9.2 ms/célula avulsa · 0.12 s por folha (lote de 450)
+modelo salvo em modelo/cnn_emnist_maiusculas_28x28.keras
+
+ressalva: holdout mede mal o desempenho real — o KNN tinha 94,1% de
+holdout e 78,6% na folha. Confira com: python avaliar.py --coluna nome

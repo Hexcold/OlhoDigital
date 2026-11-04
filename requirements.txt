@@ -1,0 +1,16 @@
+# O pipeline de imagem, nas versões em que os resultados foram medidos.
+# A API tem as dela em api/requirements.txt.
+h5py==3.16.0
+joblib==1.5.3
+keras==3.15.1
+matplotlib==3.11.0
+numpy==2.5.1
+opencv-python-headless==5.0.0.93
+openpyxl==3.1.5
+rapidfuzz==3.14.5
+scikit-learn==1.9.0
+scipy==1.18.0
+torch==2.13.0
+
+# só os testes da API usam
+httpx==0.28.1

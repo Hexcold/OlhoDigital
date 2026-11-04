@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Paleta azul e branco.
+ *
+ * As cores institucionais moram AQUI, em variáveis, e não espalhadas pelas
+ * classes — trocar por uma paleta oficial é editar este bloco. Não usamos
+ * brasão, logotipo nem tipografia da UFC: a ferramenta não é sistema
+ * institucional, e uma tela de frequência com cara de oficial pode fazer
+ * alguém supor que a presença foi registrada no SIGAA, o que não acontece.
+ *
+ * O azul é CROMO — cabeçalho, ação primária, foco. Âmbar, vermelho e verde
+ * ficam reservados para SIGNIFICADO: na tela de revisão a cor não é
+ * decoração, ela codifica confiança por caractere, alerta de sósia e estado da
+ * decisão. Azul demais competiria com isso. */
+@theme {
+  --color-marca-50: #eff6ff;
+  --color-marca-100: #dbeafe;
+  --color-marca-200: #bfdbfe;
+  --color-marca-500: #2563eb;
+  --color-marca-600: #1d4ed8;
+  --color-marca-700: #1e40af;
+  --color-marca-900: #172554;
+}
+
+/* A tira da linha é uma faixa larga e baixa. No celular ela não cabe na
+ * largura da tela, e reduzir para caber tornaria a letra ilegível — que é
+ * justamente o que o revisor precisa ver. Então ela rola na horizontal, com
+ * ajuste por toque, e nunca empurra a página inteira para o lado. */
+.tira-linha {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.tira-linha img {
+  max-width: none;
+  height: 3.25rem;
+}
+@media (min-width: 768px) {
+  .tira-linha img {
+    height: 4rem;
+  }
+}

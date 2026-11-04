@@ -1,2 +1,29 @@
+# Dados reais de discentes — LGPD, nunca versionar
 *.xlsx
+
 .venv/
+__pycache__/
+*.pyc
+
+# Notas de trabalho: citam casos reais das folhas (LGPD), ficam só na máquina
+vault/
+
+# Contém a deliberação privada da banca
+apresentação_TCC1.md
+
+# Folhas escaneadas: matrículas e nomes manuscritos reais — LGPD
+experimento-imagem/dados/
+# Qualquer cache de recorte, em pasta ou arquivo, inclusive cópia de segurança:
+# são pedaços de folha real. Um `.npz.bak` já escapou de um padrão mais estreito.
+experimento-imagem/cache_*
+experimento-imagem/modelo/*.joblib
+# Afinados com células das folhas reais: quem clona não precisa deles para rodar.
+experimento-imagem/modelo/cnn_nome_afinada*
+
+# Datasets de treino: baixáveis da fonte, grandes demais para o git.
+# EMNIST ByClass = 561 MB compactado. MNIST (train-*-ubyte.gz) fica, são 10 MB.
+experimento-imagem/modelo/*.zip
+experimento-imagem/modelo/emnist-*
+
+# Configuração local do Docker, com a senha do banco
+.env

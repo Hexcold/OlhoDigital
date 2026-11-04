@@ -1,0 +1,49 @@
+# O sistema inteiro: banco, API e cliente compilado.
+#
+#   docker compose up --build
+#
+# Abre em http://127.0.0.1:8080. Ajustes no .env, a partir do .env.exemplo.
+
+services:
+  banco:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: olhodigital
+      POSTGRES_PASSWORD: ${OLHODIGITAL_SENHA_BANCO:-olhodigital}
+      POSTGRES_DB: olhodigital
+    volumes:
+      # A partir do 18 a imagem guarda os dados em um subdiretório da versão, e
+      # o volume fica aqui, não em /var/lib/postgresql/data.
+      - banco:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U olhodigital -d olhodigital"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      banco:
+        condition: service_healthy
+    environment:
+      OLHODIGITAL_DATABASE_URL: postgresql+psycopg://olhodigital:${OLHODIGITAL_SENHA_BANCO:-olhodigital}@banco/olhodigital
+      OLHODIGITAL_ARQUIVO_USUARIOS: /estado/usuarios.json
+      # Vazio lê com a CNN base. Ver o .env.exemplo antes de ligar o afinado.
+      OLHODIGITAL_MODELO_LETRAS: ${OLHODIGITAL_MODELO_LETRAS:-}
+    ports:
+      # Só nesta máquina por padrão: o sistema guarda dado pessoal, e aqui não há HTTPS.
+      - "${OLHODIGITAL_ENDERECO:-127.0.0.1}:${OLHODIGITAL_PORTA:-8080}:8000"
+    volumes:
+      - folhas:/app/experimento-imagem/dados/enviadas
+      - estado:/estado
+      # Dado real e modelos afinados ficam fora da imagem, de propósito.
+      - ./experimento-fuzzy/dados:/app/experimento-fuzzy/dados:ro
+      - ./experimento-imagem/modelo:/modelos:ro
+
+volumes:
+  banco:
+  folhas:
+  estado:

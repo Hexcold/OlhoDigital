@@ -1,0 +1,156 @@
+[
+ {
+  "campo": "matricula",
+  "metrica": "levenshtein",
+  "semantica": "literal",
+  "top1": 23,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "damerau_lev",
+  "semantica": "literal",
+  "top1": 22,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "osa",
+  "semantica": "literal",
+  "top1": 22,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "indel",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "lcs",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "jaro",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "jaro_winkler",
+  "semantica": "literal",
+  "top1": 22,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "token_sort",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "token_set",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "partial",
+  "semantica": "literal",
+  "top1": 22,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "hamming",
+  "semantica": "literal",
+  "top1": 23,
+  "n": 40
+ },
+ {
+  "campo": "matricula",
+  "metrica": "lev_wildcard",
+  "semantica": "literal",
+  "top1": 23,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "levenshtein",
+  "semantica": "literal",
+  "top1": 19,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "damerau_lev",
+  "semantica": "literal",
+  "top1": 19,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "osa",
+  "semantica": "literal",
+  "top1": 19,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "indel",
+  "semantica": "literal",
+  "top1": 21,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "lcs",
+  "semantica": "literal",
+  "top1": 16,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "jaro",
+  "semantica": "literal",
+  "top1": 21,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "jaro_winkler",
+  "semantica": "literal",
+  "top1": 23,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "token_sort",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "token_set",
+  "semantica": "literal",
+  "top1": 20,
+  "n": 40
+ },
+ {
+  "campo": "nome",
+  "metrica": "partial",
+  "semantica": "literal",
+  "top1": 30,
+  "n": 40
+ }
+]

@@ -1,0 +1,12 @@
+# Só as dependências diretas da API. As do pipeline (opencv, keras, rapidfuzz,
+# numpy, openpyxl) já estão no .venv e não são listadas aqui — separá-las é
+# parte da refatoração para pacote, que está adiada.
+#
+#   ./.venv/bin/pip install -r api/requirements.txt
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlalchemy==2.0.52
+psycopg[binary]==3.3.4
+python-multipart==0.0.32
+pydantic-settings==2.15.0
