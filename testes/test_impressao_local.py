@@ -149,6 +149,27 @@ class Abrir(unittest.TestCase):
             self.assertEqual(os.environ["OLHODIGITAL_CABECALHO"],
                              str(pacote / "dados" / "cabecalho.json"))
 
+    def test_os_programas_chamados_nao_herdam_a_busca_de_dll(self):
+        kernel32 = mock.Mock()
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch("ctypes.windll", mock.Mock(kernel32=kernel32), create=True):
+            self.abrir.liberar_busca_de_dll()
+        kernel32.SetDllDirectoryW.assert_called_once_with(None)
+
+    def test_a_busca_so_e_liberada_depois_das_importacoes(self):
+        fonte = (PACOTE / "abrir.py").read_text(encoding="utf-8")
+        corpo = fonte[fonte.index("def main()"):]
+        self.assertLess(corpo.index("_lote()"), corpo.index("liberar_busca_de_dll()"))
+        self.assertLess(corpo.index("liberar_busca_de_dll()"), corpo.index("uvicorn.run"))
+
+    def test_fora_do_exe_a_busca_nao_e_tocada(self):
+        kernel32 = mock.Mock()
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch("ctypes.windll", mock.Mock(kernel32=kernel32), create=True):
+            self.abrir.liberar_busca_de_dll()
+        kernel32.SetDllDirectoryW.assert_not_called()
+
     def test_sem_a_pasta_de_programas_usa_os_do_sistema(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ):
             antes = os.environ["PATH"]

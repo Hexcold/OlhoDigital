@@ -59,6 +59,17 @@ def preparar_ambiente(pacote: Path, dados: Path) -> None:
     os.environ["OLHODIGITAL_CABECALHO"] = str(dados / "cabecalho.json")
 
 
+def liberar_busca_de_dll() -> None:
+    """Devolve a busca de DLLs ao normal, para os programas que o `.exe` chama.
+
+    Ao abrir, o `.exe` aponta essa busca para dentro do pacote, e quem ele chama herda
+    isso. Só pode rodar depois das importações, que ainda dependem dela.
+    """
+    if sys.platform == "win32" and getattr(sys, "frozen", False):
+        import ctypes
+        ctypes.windll.kernel32.SetDllDirectoryW(None)
+
+
 def porta_livre() -> int:
     with socket.socket() as s:
         s.bind((ENDERECO, 0))
@@ -95,13 +106,18 @@ def main() -> None:
     import uvicorn
 
     from api.impressao_local import criar
+    from api.rotas.impressao import _lote
+
+    aplicacao = criar()
+    _lote()      # carrega cv2 e numpy aqui, antes de liberar a busca
+    liberar_busca_de_dll()
 
     porta = argumentos.porta or porta_livre()
     url = f"http://{ENDERECO}:{porta}/"
     print(AVISO.format(url=url), flush=True)
     if not argumentos.sem_navegador:
         threading.Thread(target=abrir_quando_pronto, args=(url,), daemon=True).start()
-    uvicorn.run(criar(), host=ENDERECO, port=porta, http="h11", ws="none",
+    uvicorn.run(aplicacao, host=ENDERECO, port=porta, http="h11", ws="none",
                 loop="asyncio", lifespan="off", log_level="warning")
 
 

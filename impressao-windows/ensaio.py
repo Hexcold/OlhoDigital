@@ -138,6 +138,12 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
     tempos = {"abrir_s": round(programa.abrir(), 1)}
     base = programa.base
     print(f"abriu em {tempos['abrir_s']} s", flush=True)
+    if os.name == "nt":
+        try:
+            import diagnostico_dll                    # temporário
+            diagnostico_dll.diagnosticar(next((dados / "Temp").glob("_MEI*")))
+        except Exception as erro:                     # noqa: BLE001
+            print("diagnóstico falhou:", repr(erro), flush=True)
 
     print("\nsó a impressão, só neste computador")
     estado, html = pedir(base, "GET", "/")
