@@ -646,12 +646,17 @@ def desenhar_svg(layout: Layout = LAYOUT, chave: str = "",
 
 def gerar(caminho_pdf: str, chave: str = "",
           cabecalho: Cabecalho | None = None) -> str:
-    """Escreve o SVG ao lado e converte para PDF com rsvg-convert."""
-    caminho_svg = os.path.splitext(caminho_pdf)[0] + ".svg"
-    with open(caminho_svg, "w", encoding="utf-8") as f:
+    """Escreve o SVG ao lado e converte para PDF com rsvg-convert.
+
+    O programa recebe a pasta em `cwd` e só o nome do arquivo: no Windows, um
+    caminho com acento (`C:\\Users\\João\\...`) não chega inteiro a todo programa.
+    """
+    pasta, nome_pdf = os.path.split(os.path.abspath(caminho_pdf))
+    nome_svg = os.path.splitext(nome_pdf)[0] + ".svg"
+    with open(os.path.join(pasta, nome_svg), "w", encoding="utf-8") as f:
         f.write(desenhar_svg(chave=chave, cabecalho=cabecalho))
-    subprocess.run(["rsvg-convert", "--format=pdf", "--output", caminho_pdf,
-                    caminho_svg], check=True)
+    subprocess.run(["rsvg-convert", "--format=pdf", "--output", nome_pdf, nome_svg],
+                   cwd=pasta, check=True)
     return caminho_pdf
 
 
@@ -689,12 +694,16 @@ def conferir_deteccao(caminho_pdf: str, dpis=(150, 200, 300, 400, 600)) -> dict:
     dicionario = cv2.aruco.getPredefinedDictionary(ARUCO_DICIONARIO)
     detector = cv2.aruco.ArucoDetector(dicionario, cv2.aruco.DetectorParameters())
     resultado = {}
-    with tempfile.TemporaryDirectory() as tmp:
+    pasta, nome_pdf = os.path.split(os.path.abspath(caminho_pdf))
+    with tempfile.TemporaryDirectory(dir=pasta) as tmp:
         for dpi in dpis:
-            base = os.path.join(tmp, f"r{dpi}")
+            base = os.path.join(os.path.basename(tmp), f"r{dpi}")
             subprocess.run(["pdftoppm", "-r", str(dpi), "-png", "-singlefile",
-                            caminho_pdf, base], check=True)
-            img = cv2.imread(base + ".png", cv2.IMREAD_GRAYSCALE)
+                            nome_pdf, base], cwd=pasta, check=True)
+            # `cv2.imread` não abre caminho com acento no Windows, e devolve None
+            # em vez de erro. Quem lê o arquivo é o Python.
+            png = np.fromfile(os.path.join(pasta, base + ".png"), np.uint8)
+            img = cv2.imdecode(png, cv2.IMREAD_GRAYSCALE)
             _, ids, _ = detector.detectMarkers(img)
             achados = sorted(ids.flatten().tolist()) if ids is not None else []
             resultado[dpi] = achados

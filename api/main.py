@@ -15,7 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import pipeline
 from .db import criar_tabelas
-from .rotas import eventos, folhas, impressao, linhas, participantes, sessao
+from .rotas import (cadastro_chaves, eventos, folhas, impressao, linhas, participantes,
+                    sessao)
 
 log = logging.getLogger("olhodigital")
 
@@ -66,6 +67,7 @@ app.add_middleware(
 app.include_router(eventos.rotas)
 app.include_router(folhas.rotas)
 app.include_router(impressao.rotas)
+app.include_router(cadastro_chaves.rotas)
 app.include_router(sessao.rotas)
 app.include_router(linhas.rotas)
 app.include_router(participantes.rotas)

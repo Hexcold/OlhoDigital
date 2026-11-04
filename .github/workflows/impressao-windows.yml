@@ -1,0 +1,112 @@
+# Gera o `.exe` da impressão numa máquina Windows, testa e guarda o arquivo (D19).
+# O PyInstaller não gera `.exe` de outro sistema, e só o que está no git chega aqui:
+# folhas e listas de alunos ficam fora dele.
+name: impressao-windows
+
+on:
+  push:
+    branches: [prototipo01, main]
+    paths:
+      - ".github/workflows/impressao-windows.yml"
+      - "impressao-windows/**"
+      - "api/**"
+      - "web/**"
+      - "testes/**"
+      - "experimento-imagem/*.py"
+      - "experimento-imagem/cabecalho.json"
+      - "experimento-fuzzy/*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exe:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Tela
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Programas do Windows
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-librsvg
+            mingw-w64-ucrt-x86_64-poppler
+            mingw-w64-ucrt-x86_64-fontconfig
+
+      - name: Versões
+        shell: msys2 {0}
+        run: |
+          rsvg-convert --version
+          pdftoppm -v 2>&1 | head -1
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Dependências
+        run: python -m pip install -r impressao-windows/requirements.txt
+
+      - name: Copiar os programas para o pacote
+        shell: msys2 {0}
+        run: bash impressao-windows/coletar_programas.sh impressao-windows/programas
+
+      # Mesmos programas e mesma fonte que vão no `.exe`. A soma de conferência da v4
+      # entra aqui: prova que a folha desenhada no Windows é a mesma, byte a byte.
+      - name: Testes da impressão no Windows
+        env:
+          FONTCONFIG_FILE: ${{ github.workspace }}\impressao-windows\fontes\fonts.conf
+          FONTCONFIG_PATH: ${{ github.workspace }}\impressao-windows\fontes
+          PANGOCAIRO_BACKEND: fc
+          XDG_CACHE_HOME: ${{ runner.temp }}\cache-fontes
+          PYTHONPATH: testes
+          PYTHONUTF8: "1"
+        run: |
+          $python = (Get-Command python).Source
+          $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
+          & $python -W ignore -m unittest test_geometria test_cabecalho test_chave `
+            test_planilha test_pdf test_casar_chave test_impressao_local
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Gerar o exe
+        run: python -m PyInstaller --noconfirm impressao-windows/impressao.spec
+
+      - name: Ensaio do exe
+        run: python impressao-windows/ensaio.py dist/OlhoDigital-Impressao.exe saida-ensaio
+
+      - name: Conferir os PDFs do exe
+        shell: msys2 {0}
+        run: |
+          pdffonts saida-ensaio/chaves.pdf | tee saida-ensaio/pdffonts.txt
+          grep -q NotoSans-Bold saida-ensaio/pdffonts.txt
+          grep -q NotoSans-Regular saida-ensaio/pdffonts.txt
+          if grep -qiE 'verdana|dejavu|segoe|arial|tahoma' saida-ensaio/pdffonts.txt; then
+            echo "o PDF saiu com fonte do Windows"; exit 1
+          fi
+          pdfinfo saida-ensaio/chaves.pdf | grep -qE '^Pages: +2$'
+          pdfinfo saida-ensaio/lote.pdf | grep -qE '^Pages: +25$'
+          pdfinfo saida-ensaio/grande.pdf | grep -qE '^Pages: +600$'
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: OlhoDigital-Impressao
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            dist/OlhoDigital-Impressao.exe
+            saida-ensaio/

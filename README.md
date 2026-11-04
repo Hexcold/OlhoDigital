@@ -65,14 +65,24 @@ sudo pacman -S cloudflared      # uma vez
 O comando mostra um endereço `https://...trycloudflare.com`. Cada pessoa entra com a própria conta. O
 link funciona enquanto o terminal estiver aberto e o computador ligado, e muda a cada execução.
 
+### Impressão em outro computador
+
+Para quem só gera folhas e chaves existe um `.exe` para Windows: um arquivo só, que dispensa
+instalação, login e internet e abre a tela de impressão no navegador. Ele atende apenas o próprio
+computador e não leva banco, lista de alunos nem leitura de folhas.
+
+O arquivo é gerado e testado pela ação `impressao-windows` do GitHub Actions, com a receita em
+[`impressao-windows/`](impressao-windows/). As chaves impressas nele precisam ser enviadas também
+ao sistema principal, em "Cadastrar como eventos", para a leitura ter contra o que casar.
+
 ## Testes
 
 ```sh
 ./.venv/bin/python -m unittest discover -s testes
 ```
 
-A bateria cobre a geração de folhas e chaves: geometria, chave, textos, planilha, PDF, API e o
-vínculo da folha com o evento. Roda sem banco e sem dados reais, em cerca de 5 minutos. Com
+A bateria cobre a geração de folhas e chaves: geometria, chave, textos, planilha, PDF, API, o
+vínculo da folha com o evento e o `.exe` da impressão. Roda sem banco e sem dados reais, em cerca de 5 minutos. Com
 `OLHODIGITAL_TESTES_LENTOS=1` inclui as cargas de 520 e 2.000 páginas.
 
 ## Estrutura
@@ -84,6 +94,7 @@ vínculo da folha com o evento. Roda sem banco e sem dados reais, em cerca de 5 
 | `experimento-imagem/` | geração da folha, visão computacional, reconhecimento e identificação |
 | `experimento-fuzzy/` | correspondência aproximada, normalização e simulações |
 | `testes/` | bateria de testes da geração de folhas e chaves |
+| `impressao-windows/` | receita, fontes e ensaio do `.exe` da impressão |
 
 ## O que não está aqui
 

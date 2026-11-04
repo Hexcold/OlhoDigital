@@ -26,6 +26,7 @@ import io
 import itertools
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -399,16 +400,21 @@ def _montar_pdf(pedidos: list[tuple[str, int]], cabecalho: gf.Cabecalho,
     with tempfile.TemporaryDirectory() as tmp:
         paginas: list[str] = []
         for i, (chave, folhas) in enumerate(pedidos):
-            pdf = os.path.join(tmp, f"{i:04d}.pdf")
+            nome = f"{i:04d}.pdf"
+            pdf = os.path.join(tmp, nome)
             gf.gerar(pdf, chave, cabecalho)
             dpis = (150, 200, 300, 400, 600) if i == 0 else (200,)
             for dpi, ids in gf.conferir_deteccao(pdf, dpis).items():
                 if not set(ids) >= {0, 1, 2, 3}:
                     raise ValueError(f"a folha de {chave or 'chave em branco'} "
                                      f"não detecta os 4 marcadores a {dpi} dpi")
-            paginas += [pdf] * folhas
-        subprocess.run(["pdfunite", *paginas, saida], check=True,
+            paginas += [nome] * folhas
+        # Uma entrada por página. No Windows a linha de comando tem 32.767
+        # caracteres: com o caminho inteiro, o lote estourava perto de 500 folhas,
+        # que é o tamanho da coleta. Com nome curto cabem as 2.000 de LIMITE_PAGINAS.
+        subprocess.run(["pdfunite", *paginas, "lote.pdf"], cwd=tmp, check=True,
                        capture_output=True)
+        shutil.move(os.path.join(tmp, "lote.pdf"), saida)
     return {"chaves": len(pedidos), "paginas": len(paginas),
             "bytes": os.path.getsize(saida)}
 

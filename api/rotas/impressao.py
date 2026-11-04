@@ -4,27 +4,22 @@ Casca fina sobre `lote_folhas`, onde as regras moram. O PDF sai sempre do
 cabeçalho SALVO, nunca do que veio no pedido: assim o que foi conferido na tela
 é o que vai para a impressora, e o arquivo guarda qual cabeçalho foi usado.
 
-Só `/cadastrar` toca no banco. Gerar folha funciona com o Postgres desligado,
-porque nenhuma etapa da impressão depende dele.
+Este módulo não importa banco nem leitura de folha. É ele que vai no `.exe` da
+impressão (D19), e cadastrar as chaves como eventos mora em `cadastro_chaves.py`.
 """
 from __future__ import annotations
 
+import sys
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
 
-from .. import pipeline
-from ..db import dependencia_sessao
-from ..esquemas import (CabecalhoFolha, CabecalhoSaida, CadastroSaida, ItemLote,
-                        LoteSaida, PedidoCadastro, PedidoFolhas, PedidoPdf,
-                        PedidoPrevia)
-from ..tabelas import Evento
+from ..config import config
+from ..esquemas import (CabecalhoFolha, CabecalhoSaida, ItemLote, LoteSaida,
+                        PedidoFolhas, PedidoPdf, PedidoPrevia)
 
 rotas = APIRouter(prefix="/impressao", tags=["impressão"])
 
@@ -35,7 +30,9 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 def _lote():
     """Import tardio: `lote_folhas` puxa cv2, e import pesado no topo de módulo de
     rota já derrubou este servidor uma vez."""
-    pipeline.preparar()
+    caminho = str(config.pasta_pipeline)
+    if caminho not in sys.path:
+        sys.path.insert(0, caminho)
     import lote_folhas                                             # noqa: E402
     return lote_folhas
 
@@ -139,29 +136,3 @@ def gerar_pdf(pedido: PedidoPdf) -> Response:
             raise HTTPException(422, str(erro)) from erro
         nome = f"folhas_{resumo['chaves']}chaves_{resumo['paginas']}paginas.pdf"
         return _anexo(caminho.read_bytes(), "application/pdf", nome)
-
-
-@rotas.post("/cadastrar", response_model=CadastroSaida)
-def cadastrar(pedido: PedidoCadastro,
-              db: Session = Depends(dependencia_sessao)) -> CadastroSaida:
-    """Registra as chaves do lote como eventos, para a leitura ter contra o que
-    casar (D15). Chave que já existe fica como está: repetir o envio é seguro.
-    """
-    lf = _lote()
-    erros, _ = lf.validar_lote(_itens(lf, pedido.itens))
-    if erros:
-        raise HTTPException(422, "; ".join(erros))
-    chaves = [i.chave.strip().upper() for i in pedido.itens]
-    try:
-        existentes = set(db.scalars(select(Evento.chave)
-                                    .where(Evento.chave.in_(chaves))))
-        novos = [Evento(chave=chave, tipo="evento", nome=i.nome or chave,
-                        local=i.local, responsavel=i.responsavel)
-                 for chave, i in zip(chaves, pedido.itens)
-                 if chave not in existentes]
-        db.add_all(novos)
-        db.commit()
-    except OperationalError as erro:
-        raise HTTPException(503, "banco de dados indisponível: inicie o "
-                                 "Postgres para cadastrar") from erro
-    return CadastroSaida(criados=len(novos), ja_existiam=len(existentes))

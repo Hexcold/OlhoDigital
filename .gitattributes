@@ -1,0 +1,2 @@
+# O Windows que gera o `.exe` troca o fim de linha na cópia, e o bash não aceita CRLF.
+*.sh text eol=lf

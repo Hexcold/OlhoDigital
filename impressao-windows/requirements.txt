@@ -1,0 +1,14 @@
+# O que o `.exe` da impressão leva, nas mesmas versões do resto do projeto. Sem torch,
+# keras, banco nem nada da leitura das folhas (D19).
+fastapi==0.141.1
+numpy==2.5.1
+opencv-python-headless==5.0.0.93
+openpyxl==3.1.5
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+rapidfuzz==3.14.5
+uvicorn==0.52.4
+
+# só para gerar e testar: não vão para dentro do arquivo
+httpx==0.28.1
+pyinstaller==6.22.3

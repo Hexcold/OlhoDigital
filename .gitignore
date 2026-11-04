@@ -27,3 +27,8 @@ experimento-imagem/modelo/emnist-*
 
 # Configuração local do Docker, com a senha do banco
 .env
+
+# Gerados pelo PyInstaller, e os programas do Windows copiados para dentro do `.exe`
+/build/
+/dist/
+impressao-windows/programas/
