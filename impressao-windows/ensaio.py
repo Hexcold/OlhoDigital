@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -25,6 +26,22 @@ CHAVES = ("ABCDEFGHIJKLMNOP", "QRSTUVWXYZ")      # as 26 letras, para comparar a
 FOLHAS_GRANDE = 600   # com o caminho inteiro, a junção estouraria no Windows perto de 500
 COMPLEMENTO = "CAMPUS QUIXADÁ"
 
+# Roda em processo à parte porque quem se liga ao console recebe o aviso de fechar junto.
+FECHAR_JANELA = """
+import ctypes, sys
+kernel32 = ctypes.WinDLL("kernel32")
+user32 = ctypes.WinDLL("user32")
+kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+user32.PostMessageW.argtypes = (ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t)
+kernel32.FreeConsole()
+if not kernel32.AttachConsole(int(sys.argv[1])):
+    sys.exit(2)
+janela = kernel32.GetConsoleWindow()
+if not janela:
+    sys.exit(3)
+user32.PostMessageW(janela, 0x0010, 0, 0)   # WM_CLOSE, o mesmo que clicar no X
+"""
+
 cliente = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -36,7 +53,7 @@ class Programa:
         self.processo = None
         self.base = ""
 
-    def abrir(self) -> float:
+    def abrir(self, console_proprio: bool = False) -> float:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             porta = s.getsockname()[1]
@@ -46,7 +63,8 @@ class Programa:
             self.processo = subprocess.Popen(
                 [str(self.exe), "--porta", str(porta), "--sem-navegador"],
                 env=self.ambiente, stdin=subprocess.DEVNULL, stdout=log,
-                stderr=subprocess.STDOUT)
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_CONSOLE if console_proprio else 0)
         while time.monotonic() - inicio < ESPERA_S:
             if self.processo.poll() is not None:
                 falhar(f"o programa fechou sozinho, código {self.processo.returncode}")
@@ -105,6 +123,11 @@ def enviar_arquivo(base, caminho, nome, conteudo):
     return pedir(base, "POST", caminho, corpo, f"multipart/form-data; boundary={fronteira}")
 
 
+def tipo_do_arquivo(base, caminho):
+    with cliente.open(base + caminho, timeout=30) as resposta:
+        return resposta.headers.get("content-type", "")
+
+
 def cronometrado(chamada, *args):
     inicio = time.monotonic()
     resultado = chamada(*args)
@@ -119,6 +142,12 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
     print("\nsó a impressão, só neste computador")
     estado, html = pedir(base, "GET", "/")
     confere(estado == 200 and b'id="root"' in html, "a tela abre")
+    arquivos = [a.decode() for a in re.findall(rb'"(/assets/[^"]+)"', html)]
+    confere(len(arquivos) >= 2, f"a tela pede {len(arquivos)} arquivos")
+    for arquivo in arquivos:
+        tipo = tipo_do_arquivo(base, arquivo)
+        esperado = "text/css" if arquivo.endswith(".css") else "text/javascript"
+        confere(tipo.startswith(esperado), f"{arquivo} vem como {tipo}")
     estado, corpo = pedir(base, "GET", "/api/eu")
     eu = json.loads(corpo)
     confere(estado == 200 and eu["papel"] == "impressao" and eu["login"] is False,
@@ -181,6 +210,31 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
     return tempos
 
 
+def medir_fechar_no_x(programa: Programa, temporaria: Path) -> dict:
+    """Fecha a janela como a pessoa fecharia e conta o que sobra na pasta temporária.
+
+    A documentação do PyInstaller garante a limpeza ao terminar normalmente, e diz que a
+    pasta fica se o programa for morto. Sobre o X ela não diz nada, então isto é medido.
+    """
+    programa.fechar()
+    antes = set(temporaria.glob("_MEI*"))
+    programa.abrir(console_proprio=True)
+    aberta = set(temporaria.glob("_MEI*")) - antes
+    r = subprocess.run([sys.executable, "-c", FECHAR_JANELA, str(programa.processo.pid)],
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    if r.returncode in (2, 3):
+        return {"medido": False, "motivo": f"sem console, código {r.returncode}"}
+    try:
+        programa.processo.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        return {"medido": False, "motivo": "o programa não fechou em 30 s"}
+    time.sleep(5)
+    sobrou = set(temporaria.glob("_MEI*")) - antes
+    tamanho = sum(a.stat().st_size for p in sobrou for a in p.rglob("*") if a.is_file())
+    return {"medido": True, "pastas_ao_abrir": len(aberta), "pastas_que_sobraram": len(sobrou),
+            "mb_que_sobraram": round(tamanho / 1e6, 1)}
+
+
 def main() -> None:
     exe, saida = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     saida.mkdir(parents=True, exist_ok=True)
@@ -195,6 +249,8 @@ def main() -> None:
     programa = Programa(exe, ambiente, saida / "exe.log")
     try:
         tempos = ensaiar(programa, saida, dados)
+        if os.name == "nt":
+            tempos["fechar_no_x"] = medir_fechar_no_x(programa, temporaria)
     finally:
         programa.fechar()
         if (saida / "exe.log").exists():

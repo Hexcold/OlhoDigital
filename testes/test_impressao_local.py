@@ -1,6 +1,7 @@
 """O `.exe` da impressão: só a impressão, só neste computador, e o que muda no Windows."""
 import hashlib
 import importlib.util
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -91,6 +92,20 @@ class SoImpressao(unittest.TestCase):
                                ("exemplo.invalid", 400), ("127.0.0.1.exemplo.invalid", 400)):
             r = self.cliente.get("/api/eu", headers={"host": host})
             self.assertEqual(r.status_code, esperado, host)
+
+    def test_o_registro_do_windows_nao_deixa_a_tela_em_branco(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pasta = Path(tmp)
+            for nome in ("index.html", "a.js", "a.css", "a.svg"):
+                (pasta / nome).write_text("x")
+            # o que o registro de algumas máquinas diz, e o `mimetypes` obedece
+            for extensao in (".js", ".css", ".svg"):
+                mimetypes.add_type("text/plain", extensao)
+            cliente = TestClient(impressao_local.criar(pasta), base_url="http://127.0.0.1")
+            for nome, tipo in (("a.js", "text/javascript"), ("a.css", "text/css"),
+                               ("a.svg", "image/svg+xml")):
+                self.assertTrue(cliente.get("/" + nome).headers["content-type"].startswith(tipo),
+                                nome)
 
     def test_nao_carrega_banco_nem_leitura(self):
         codigo = ("import sys\n"

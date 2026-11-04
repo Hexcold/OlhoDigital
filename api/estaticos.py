@@ -6,10 +6,22 @@ mesmo que o proxy do Vite faz no desenvolvimento.
 """
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
 from starlette.exceptions import HTTPException
 from starlette.staticfiles import StaticFiles
+
+
+def _fixar_tipos() -> None:
+    """No Windows o `mimetypes` lê o registro, e há máquina com `.js` como `text/plain`.
+
+    O navegador recusa módulo com esse tipo: a tela fica em branco, e do lado do
+    servidor não aparece erro nenhum.
+    """
+    for tipo, extensao in (("text/javascript", ".js"), ("text/css", ".css"),
+                           ("image/svg+xml", ".svg")):
+        mimetypes.add_type(tipo, extensao)
 
 
 class _Cliente(StaticFiles):
@@ -30,6 +42,7 @@ class Aplicacao:
         if not (pasta / "index.html").exists():
             raise RuntimeError(f"{pasta} não tem o cliente compilado: rode o build "
                                f"em web/")
+        _fixar_tipos()
         self.api = api
         self.cliente = _Cliente(directory=pasta, html=True)
         self.diretas = diretas        # caminhos que vão à API sem o prefixo
