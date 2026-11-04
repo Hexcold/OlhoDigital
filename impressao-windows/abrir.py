@@ -55,7 +55,7 @@ def preparar_ambiente(pacote: Path, dados: Path) -> None:
     os.environ["FONTCONFIG_PATH"] = str(pacote / "fontes")
     # Sem isto o Pango do Windows pergunta ao sistema, e a fonte instalada ganha.
     os.environ["PANGOCAIRO_BACKEND"] = "fc"
-    os.environ["XDG_CACHE_HOME"] = str(dados / "cache")
+    os.environ["XDG_CACHE_HOME"] = str(pacote / "cache")
     os.environ["OLHODIGITAL_CABECALHO"] = str(dados / "cabecalho.json")
 
 
@@ -63,7 +63,8 @@ def liberar_busca_de_dll() -> None:
     """Devolve a busca de DLLs ao normal, para os programas que o `.exe` chama.
 
     Ao abrir, o `.exe` aponta essa busca para dentro do pacote, e quem ele chama herda
-    isso. Só pode rodar depois das importações, que ainda dependem dela.
+    isso. Zerar é o que a documentação do PyInstaller recomenda, e faz os programas rodarem
+    como nos testes. Só depois das importações, que ainda dependem dela.
     """
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         import ctypes

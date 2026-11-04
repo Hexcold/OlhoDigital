@@ -145,7 +145,7 @@ class Abrir(unittest.TestCase):
             self.assertEqual(os.environ["FONTCONFIG_FILE"],
                              str(pacote / "fontes" / "fonts.conf"))
             self.assertEqual(os.environ["PANGOCAIRO_BACKEND"], "fc")
-            self.assertEqual(os.environ["XDG_CACHE_HOME"], str(pacote / "dados" / "cache"))
+            self.assertEqual(os.environ["XDG_CACHE_HOME"], str(pacote / "cache"))
             self.assertEqual(os.environ["OLHODIGITAL_CABECALHO"],
                              str(pacote / "dados" / "cabecalho.json"))
 
@@ -323,6 +323,18 @@ class Pacote(unittest.TestCase):
         for proibido in ("xlsx", '"dados"', "modelo", "usuarios", "vault"):
             self.assertNotIn(proibido, trecho)
 
+    def test_o_exe_se_descompacta_em_pasta_sem_acento(self):
+        # A51: o poppler quebra dentro de `C:\\Users\\João\\...`. Quem prova é o ensaio no
+        # Windows, com a pasta pessoal simulada; aqui fica só a trava contra tirar a opção.
+        receita = (PACOTE / "impressao.spec").read_text(encoding="utf-8")
+        self.assertIn(r'EXTRACAO = r"%ProgramData%\OlhoDigital"', receita)
+        self.assertIn("runtime_tmpdir=EXTRACAO", receita)
+
+    def test_os_programas_entram_depois_da_analise(self):
+        receita = (PACOTE / "impressao.spec").read_text(encoding="utf-8")
+        self.assertNotIn('"programas"), "programas"', receita)
+        self.assertLess(receita.index("analise = Analysis"), receita.index("Tree("))
+
     def test_as_dependencias_nao_trazem_a_leitura(self):
         linhas = (PACOTE / "requirements.txt").read_text(encoding="utf-8").splitlines()
         pacotes = {l.split("==")[0].lower() for l in linhas if "==" in l}
@@ -342,6 +354,6 @@ class Pacote(unittest.TestCase):
 
     def test_o_que_o_build_gera_fica_fora_do_git(self):
         for caminho in ("dist/OlhoDigital-Impressao.exe", "build/x",
-                        "impressao-windows/programas/x.dll"):
+                        "impressao-windows/programas/x.dll", "impressao-windows/cache/x"):
             r = subprocess.run(["git", "check-ignore", "-q", caminho], cwd=RAIZ)
             self.assertEqual(r.returncode, 0, caminho)

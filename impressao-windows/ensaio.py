@@ -139,11 +139,10 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
     base = programa.base
     print(f"abriu em {tempos['abrir_s']} s", flush=True)
     if os.name == "nt":
-        try:
-            import diagnostico_dll                    # temporário
-            diagnostico_dll.diagnosticar(next((dados / "Temp").glob("_MEI*")))
-        except Exception as erro:                     # noqa: BLE001
-            print("diagnóstico falhou:", repr(erro), flush=True)
+        extraido = next(pasta_de_extracao().glob("_MEI*"))
+        confere(str(extraido).isascii(), f"descompacta sem acento, em {extraido.parent}")
+        print(subprocess.run(["icacls", os.environ["ProgramData"]], capture_output=True,
+                             text=True, errors="replace").stdout, flush=True)
 
     print("\nsó a impressão, só neste computador")
     estado, html = pedir(base, "GET", "/")
@@ -216,16 +215,22 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
     return tempos
 
 
-def medir_fechar_no_x(programa: Programa, temporaria: Path) -> dict:
+def pasta_de_extracao() -> Path:
+    """Onde o `.exe` se descompacta: ver `EXTRACAO` em `impressao.spec`."""
+    return Path(os.environ["ProgramData"]) / "OlhoDigital"
+
+
+def medir_fechar_no_x(programa: Programa) -> dict:
     """Fecha a janela como a pessoa fecharia e conta o que sobra na pasta temporária.
 
     A documentação do PyInstaller garante a limpeza ao terminar normalmente, e diz que a
     pasta fica se o programa for morto. Sobre o X ela não diz nada, então isto é medido.
     """
+    extracao = pasta_de_extracao()
     programa.fechar()
-    antes = set(temporaria.glob("_MEI*"))
+    antes = set(extracao.glob("_MEI*"))
     programa.abrir(console_proprio=True)
-    aberta = set(temporaria.glob("_MEI*")) - antes
+    aberta = set(extracao.glob("_MEI*")) - antes
     r = subprocess.run([sys.executable, "-c", FECHAR_JANELA, str(programa.processo.pid)],
                        creationflags=subprocess.CREATE_NO_WINDOW)
     if r.returncode in (2, 3):
@@ -235,7 +240,7 @@ def medir_fechar_no_x(programa: Programa, temporaria: Path) -> dict:
     except subprocess.TimeoutExpired:
         return {"medido": False, "motivo": "o programa não fechou em 30 s"}
     time.sleep(5)
-    sobrou = set(temporaria.glob("_MEI*")) - antes
+    sobrou = set(extracao.glob("_MEI*")) - antes
     tamanho = sum(a.stat().st_size for p in sobrou for a in p.rglob("*") if a.is_file())
     return {"medido": True, "pastas_ao_abrir": len(aberta), "pastas_que_sobraram": len(sobrou),
             "mb_que_sobraram": round(tamanho / 1e6, 1)}
@@ -256,7 +261,7 @@ def main() -> None:
     try:
         tempos = ensaiar(programa, saida, dados)
         if os.name == "nt":
-            tempos["fechar_no_x"] = medir_fechar_no_x(programa, temporaria)
+            tempos["fechar_no_x"] = medir_fechar_no_x(programa)
     finally:
         programa.fechar()
         if (saida / "exe.log").exists():

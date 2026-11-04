@@ -32,3 +32,4 @@ experimento-imagem/modelo/emnist-*
 /build/
 /dist/
 impressao-windows/programas/
+impressao-windows/cache/
