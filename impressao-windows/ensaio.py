@@ -26,22 +26,6 @@ CHAVES = ("ABCDEFGHIJKLMNOP", "QRSTUVWXYZ")      # as 26 letras, para comparar a
 FOLHAS_GRANDE = 600   # com o caminho inteiro, a junção estouraria no Windows perto de 500
 COMPLEMENTO = "CAMPUS QUIXADÁ"
 
-# Roda em processo à parte porque quem se liga ao console recebe o aviso de fechar junto.
-FECHAR_JANELA = """
-import ctypes, sys
-kernel32 = ctypes.WinDLL("kernel32")
-user32 = ctypes.WinDLL("user32")
-kernel32.GetConsoleWindow.restype = ctypes.c_void_p
-user32.PostMessageW.argtypes = (ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t)
-kernel32.FreeConsole()
-if not kernel32.AttachConsole(int(sys.argv[1])):
-    sys.exit(2)
-janela = kernel32.GetConsoleWindow()
-if not janela:
-    sys.exit(3)
-user32.PostMessageW(janela, 0x0010, 0, 0)   # WM_CLOSE, o mesmo que clicar no X
-"""
-
 cliente = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -53,7 +37,7 @@ class Programa:
         self.processo = None
         self.base = ""
 
-    def abrir(self, console_proprio: bool = False) -> float:
+    def abrir(self) -> float:
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             porta = s.getsockname()[1]
@@ -63,8 +47,7 @@ class Programa:
             self.processo = subprocess.Popen(
                 [str(self.exe), "--porta", str(porta), "--sem-navegador"],
                 env=self.ambiente, stdin=subprocess.DEVNULL, stdout=log,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_CONSOLE if console_proprio else 0)
+                stderr=subprocess.STDOUT)
         while time.monotonic() - inicio < ESPERA_S:
             if self.processo.poll() is not None:
                 falhar(f"o programa fechou sozinho, código {self.processo.returncode}")
@@ -85,6 +68,15 @@ class Programa:
         else:
             self.processo.terminate()
         self.processo.wait(timeout=30)
+
+
+def pasta_de_extracao() -> Path:
+    """Onde o `.exe` se descompacta: ver `EXTRACAO` em `impressao.spec`."""
+    return Path(os.environ["ProgramData"]) / "OlhoDigital"
+
+
+def contar_extracoes() -> int:
+    return len(list(pasta_de_extracao().glob("*_MEI*")))
 
 
 def falhar(motivo: str) -> None:
@@ -208,42 +200,31 @@ def ensaiar(programa: Programa, saida: Path, dados: Path) -> dict:
             "o texto fica na pasta do usuário")
 
     programa.fechar()
+    if os.name == "nt":
+        confere(contar_extracoes() == 1, "morto à força, deixa a pasta para trás")
     tempos["reabrir_s"] = round(programa.abrir(), 1)
     corpo = pedir(programa.base, "GET", "/api/impressao/cabecalho")[1]
     confere(json.loads(corpo)["cabecalho"]["complemento"] == COMPLEMENTO,
             "o texto editado continua depois de fechar e abrir")
+    if os.name == "nt":
+        confere(contar_extracoes() == 1, "ao abrir, apaga a sobra da execução anterior")
+        ensaiar_duas_janelas(programa)
     return tempos
 
 
-def pasta_de_extracao() -> Path:
-    """Onde o `.exe` se descompacta: ver `EXTRACAO` em `impressao.spec`."""
-    return Path(os.environ["ProgramData"]) / "OlhoDigital"
-
-
-def medir_fechar_no_x(programa: Programa) -> dict:
-    """Fecha a janela como a pessoa fecharia e conta o que sobra na pasta temporária.
-
-    A documentação do PyInstaller garante a limpeza ao terminar normalmente, e diz que a
-    pasta fica se o programa for morto. Sobre o X ela não diz nada, então isto é medido.
-    """
-    extracao = pasta_de_extracao()
-    programa.fechar()
-    antes = set(extracao.glob("_MEI*"))
-    programa.abrir(console_proprio=True)
-    aberta = set(extracao.glob("_MEI*")) - antes
-    r = subprocess.run([sys.executable, "-c", FECHAR_JANELA, str(programa.processo.pid)],
-                       creationflags=subprocess.CREATE_NO_WINDOW)
-    if r.returncode in (2, 3):
-        return {"medido": False, "motivo": f"sem console, código {r.returncode}"}
+def ensaiar_duas_janelas(primeira: Programa) -> None:
+    """Quem abre depois não pode apagar a pasta de quem ainda está aberto."""
+    print("\nduas janelas abertas")
+    segunda = Programa(primeira.exe, primeira.ambiente, primeira.log)
+    segunda.abrir()
     try:
-        programa.processo.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        return {"medido": False, "motivo": "o programa não fechou em 30 s"}
-    time.sleep(5)
-    sobrou = set(extracao.glob("_MEI*")) - antes
-    tamanho = sum(a.stat().st_size for p in sobrou for a in p.rglob("*") if a.is_file())
-    return {"medido": True, "pastas_ao_abrir": len(aberta), "pastas_que_sobraram": len(sobrou),
-            "mb_que_sobraram": round(tamanho / 1e6, 1)}
+        confere(contar_extracoes() == 2, "cada janela tem a sua pasta")
+        for nome, programa in (("primeira", primeira), ("segunda", segunda)):
+            estado, pdf = enviar_json(programa.base, "POST", "/api/impressao/folhas",
+                                      {"chave": "GOIABA", "folhas": 1})
+            confere(estado == 200 and pdf[:5] == b"%PDF-", f"a {nome} janela ainda gera PDF")
+    finally:
+        segunda.fechar()
 
 
 def main() -> None:
@@ -260,8 +241,6 @@ def main() -> None:
     programa = Programa(exe, ambiente, saida / "exe.log")
     try:
         tempos = ensaiar(programa, saida, dados)
-        if os.name == "nt":
-            tempos["fechar_no_x"] = medir_fechar_no_x(programa)
     finally:
         programa.fechar()
         if (saida / "exe.log").exists():

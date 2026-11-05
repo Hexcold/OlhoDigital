@@ -149,6 +149,46 @@ class Abrir(unittest.TestCase):
             self.assertEqual(os.environ["OLHODIGITAL_CABECALHO"],
                              str(pacote / "dados" / "cabecalho.json"))
 
+    def _extracao(self, tmp, nome="OlhoDigital"):
+        base = Path(tmp) / nome
+        for pasta in ("_MEI111", "apagar_MEI222", "_MEI_atual", "outra"):
+            (base / pasta).mkdir(parents=True)
+            (base / pasta / "x.dll").write_text("x")
+        return base
+
+    def _como_no_exe(self):
+        return (mock.patch.object(sys, "platform", "win32"),
+                mock.patch.object(sys, "frozen", True, create=True))
+
+    def test_ao_abrir_apaga_o_que_sobrou(self):
+        plataforma, congelado = self._como_no_exe()
+        with tempfile.TemporaryDirectory() as tmp, plataforma, congelado:
+            base = self._extracao(tmp)
+            self.abrir.limpar_sobras(base / "_MEI_atual")
+            self.assertEqual(sorted(p.name for p in base.iterdir()), ["_MEI_atual", "outra"])
+
+    def test_nao_apaga_a_pasta_de_outra_janela_aberta(self):
+        plataforma, congelado = self._como_no_exe()
+        with tempfile.TemporaryDirectory() as tmp, plataforma, congelado, \
+                mock.patch.object(Path, "rename", side_effect=PermissionError):
+            base = self._extracao(tmp)
+            self.abrir.limpar_sobras(base / "_MEI_atual")
+            self.assertEqual(len(list(base.iterdir())), 4)
+
+    def test_fora_da_pasta_do_programa_nada_e_apagado(self):
+        # Na pasta temporária do Windows, `_MEI*` pode ser de outro programa.
+        plataforma, congelado = self._como_no_exe()
+        with tempfile.TemporaryDirectory() as tmp, plataforma, congelado:
+            base = self._extracao(tmp, "Temp")
+            self.abrir.limpar_sobras(base / "_MEI_atual")
+            self.assertEqual(len(list(base.iterdir())), 4)
+
+    def test_fora_do_exe_nada_e_apagado(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sys, "platform", "win32"):
+            base = self._extracao(tmp)
+            self.abrir.limpar_sobras(base / "_MEI_atual")
+            self.assertEqual(len(list(base.iterdir())), 4)
+
     def test_os_programas_chamados_nao_herdam_a_busca_de_dll(self):
         kernel32 = mock.Mock()
         with mock.patch.object(sys, "platform", "win32"), \

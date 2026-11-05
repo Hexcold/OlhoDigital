@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -59,6 +60,28 @@ def preparar_ambiente(pacote: Path, dados: Path) -> None:
     os.environ["OLHODIGITAL_CABECALHO"] = str(dados / "cabecalho.json")
 
 
+def limpar_sobras(pacote: Path) -> None:
+    """Apaga o que execuções anteriores deixaram na pasta onde o `.exe` se descompacta.
+
+    Quem é morto pelo Gerenciador de Tarefas, ou encerrado antes de terminar a limpeza,
+    deixa a pasta para trás, e em %ProgramData% o Windows não a limpa. Renomear falha
+    enquanto há arquivo em uso, e é isso que separa uma sobra de outra janela aberta.
+    """
+    extracao = pacote.parent
+    if (sys.platform != "win32" or not getattr(sys, "frozen", False)
+            or extracao.name != "OlhoDigital"):
+        return
+    for pasta in extracao.glob("*_MEI*"):
+        if pasta == pacote:
+            continue
+        lixo = pasta.with_name(f"apagar{pasta.name}")
+        try:
+            pasta.rename(lixo)
+        except OSError:
+            continue
+        shutil.rmtree(lixo, ignore_errors=True)
+
+
 def liberar_busca_de_dll() -> None:
     """Devolve a busca de DLLs ao normal, para os programas que o `.exe` chama.
 
@@ -102,6 +125,7 @@ def ler_argumentos() -> argparse.Namespace:
 
 def main() -> None:
     argumentos = ler_argumentos()
+    limpar_sobras(pasta_do_pacote())
     preparar_ambiente(pasta_do_pacote(), pasta_de_dados())
 
     import uvicorn
