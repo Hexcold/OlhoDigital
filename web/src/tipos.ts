@@ -209,6 +209,8 @@ export interface ItemLote {
   nome: string | null;
   local: string | null;
   responsavel: string | null;
+  /** AAAA-MM-DD. Vai no carimbo da folha; sem ele, o carimbo é só "v4". */
+  dia: string | null;
 }
 
 export interface Lote {

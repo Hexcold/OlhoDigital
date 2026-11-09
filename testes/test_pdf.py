@@ -1,5 +1,6 @@
 """O PDF é o que vai para a gráfica: página certa, na ordem certa, no tamanho certo."""
 import concurrent.futures as cf
+import datetime as dt
 import os
 import subprocess
 import sys
@@ -55,7 +56,10 @@ class Lote(unittest.TestCase):
             with self.subTest(pagina=pagina):
                 self.assertIn("ENCONTROS UNIVERSITÁRIOS 2026", texto)
                 self.assertIn("FOLHA DE PRESENÇA", texto)
-                self.assertIn(gf.VERSAO_FOLHA, texto)
+                # sem dia no lote, o carimbo é só a geometria: a data da versão
+                # não sai mais no papel (decisão do autor, 09/11/2026)
+                self.assertIn(gf.texto_carimbo(), texto)
+                self.assertNotIn(gf.VERSAO_FOLHA, texto)
                 self.assertNotIn("DATA", texto)
 
     def test_fontes_embutidas(self):
@@ -68,6 +72,49 @@ class Lote(unittest.TestCase):
 
     def test_marcadores_em_toda_pagina(self):
         for pagina in (1, 4, 6):
+            with tempfile.TemporaryDirectory() as tmp:
+                base = os.path.join(tmp, "p")
+                subprocess.run(["pdfseparate", "-f", str(pagina), "-l", str(pagina), self.pdf, base + "%d.pdf"], check=True)
+                for dpi, ids in gf.conferir_deteccao(f"{base}{pagina}.pdf", (200,)).items():
+                    self.assertEqual(sorted(ids), [0, 1, 2, 3])
+
+
+class CarimboComDia(unittest.TestCase):
+    """O dia do evento vai no carimbo, em dia/mês/ano; sem dia, sai só v4."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.pdf = os.path.join(cls.tmp.name, "lote.pdf")
+        itens = [lf.ItemLote(2, "GOIABA", 1, dia=dt.date(2026, 11, 11)),
+                 lf.ItemLote(3, "JABUTICABA", 2, dia=dt.date(2026, 11, 13)),
+                 lf.ItemLote(4, "TAMARINDO", 1)]
+        with mock.patch.object(lf, "conferir_cabecalho", wraps=lf.conferir_cabecalho) as portao:
+            lf.gerar_pdf(itens, EU, cls.pdf)
+        cls.portoes = sorted(c.kwargs.get("carimbo") for c in portao.call_args_list)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_cada_pagina_com_o_seu_dia(self):
+        esperado = ["v4 · 11/11/2026", "v4 · 13/11/2026", "v4 · 13/11/2026", None]
+        self.assertEqual(info_pdf(self.pdf)["paginas"], len(esperado))
+        for pagina, carimbo in enumerate(esperado, start=1):
+            texto = texto_pdf(self.pdf, pagina)
+            with self.subTest(pagina=pagina):
+                self.assertNotIn(gf.VERSAO_FOLHA, texto)
+                if carimbo:
+                    self.assertIn(carimbo, texto)
+                else:
+                    self.assertIn(gf.texto_carimbo(), texto)
+                    self.assertNotIn("/2026", texto)
+
+    def test_portao_roda_uma_vez_por_carimbo(self):
+        self.assertEqual(self.portoes, ["v4", "v4 · 11/11/2026", "v4 · 13/11/2026"])
+
+    def test_marcadores_em_toda_pagina(self):
+        for pagina in range(1, 5):
             with tempfile.TemporaryDirectory() as tmp:
                 base = os.path.join(tmp, "p")
                 subprocess.run(["pdfseparate", "-f", str(pagina), "-l", str(pagina), self.pdf, base + "%d.pdf"], check=True)

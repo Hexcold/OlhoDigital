@@ -1,4 +1,5 @@
 """Os textos editáveis não podem alcançar nada que o sistema leia."""
+import datetime as dt
 import json
 import random
 import threading
@@ -42,6 +43,7 @@ class Portao(unittest.TestCase):
             "última linha": (L.x_nome + 2, L.tab_y0 + 32 * lado + 2),
             "abaixo da grade": (100, L.tab_y0 + 33 * lado + 3),
         }
+        lf._conferir_svg(svg)        # sem o ponto passa: a recusa abaixo é do ponto
         for nome, (x, y) in alvos.items():
             ponto = f'<rect x="{x}" y="{y}" width="0.5" height="0.5" fill="#777777"/>'
             with self.subTest(regiao=nome):
@@ -58,6 +60,36 @@ class Portao(unittest.TestCase):
         self.assertNotIn(">DATA<", svg)
         self.assertIn(gf.VERSAO_FOLHA, svg)
         self.assertIn(">DATA<", gf.desenhar_svg())
+
+
+class Carimbo(unittest.TestCase):
+    """O dia do evento entra no carimbo sem destravar o resto (decisão de 09/11/2026)."""
+
+    def test_dia_mes_ano_e_so_v4_sem_dia(self):
+        self.assertEqual(gf.texto_carimbo(dt.date(2026, 11, 3)), "v4 · 03/11/2026")
+        self.assertEqual(gf.texto_carimbo(None), "v4")
+
+    def test_dias_da_coleta_passam_no_portao(self):
+        for dia in (dt.date(2026, 11, 11), dt.date(2026, 11, 12), dt.date(2026, 11, 13), None):
+            with self.subTest(dia=dia):
+                self.assertEqual(lf.conferir_cabecalho(EU, carimbo=gf.texto_carimbo(dia))["pixels_fora"], 0)
+
+    def test_carimbo_que_sai_da_caixa_e_recusado(self):
+        with self.assertRaisesRegex(ValueError, "sai da caixa"):
+            lf.conferir_cabecalho(EU, carimbo="v4 · " + "W" * 30)
+
+    def test_ponto_sobre_o_carimbo_com_dia_e_recusado(self):
+        carimbo = gf.texto_carimbo(dt.date(2026, 11, 11))
+        svg = gf.desenhar_svg(cabecalho=EU, carimbo=carimbo)
+        lf._conferir_svg(svg, carimbo=carimbo)
+        L = gf.LAYOUT
+        ponto = (f'<rect x="{L.ref_x0 + L.ref_larg - 10}" y="{L.y_instrucoes + 2.5}" '
+                 'width="0.5" height="0.5" fill="#777777"/>')
+        with self.assertRaisesRegex(ValueError, "fora das áreas"):
+            lf._conferir_svg(svg.replace("</svg>", ponto + "</svg>"), carimbo=carimbo)
+
+    def test_a_v4_congelada_continua_com_a_data_da_versao(self):
+        self.assertIn(gf.VERSAO_FOLHA, gf.desenhar_svg())
 
 
 class Textos(unittest.TestCase):

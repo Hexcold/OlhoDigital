@@ -92,6 +92,26 @@ class Formatos(unittest.TestCase):
         lote = lf.ler_planilha("m.xlsx", lf.planilha_modelo())
         self.assertEqual((lote.erros, lote.alertas), ([], []))
 
+    def test_sem_a_coluna_folhas_sai_uma_por_chave(self):
+        lote = lf.ler_planilha("a.csv", csv("chave\nBANANA\n\n  \nGOIABA\n"))
+        self.conferir(lote, [("BANANA", 1), ("GOIABA", 1)])
+        self.assertEqual(lote.alertas[0], lf.SEM_FOLHAS, "o padrão tem que pedir confirmação")
+
+    def test_titulo_com_a_palavra_chave_nao_esconde_as_folhas(self):
+        self.conferir(lf.ler_planilha("a.xlsx", xlsx([["Chave do evento"], ["chave", "folhas"], ["BANANA", 3]])),
+                      [("BANANA", 3)])
+
+    def test_aba_com_folhas_vence_aba_so_com_chave(self):
+        self.conferir(lf.ler_planilha("a.xlsx", xlsx([["chave"], ["GOIABA"]], [["chave", "folhas"], ["BANANA", 3]])),
+                      [("BANANA", 3)])
+
+    def test_dia_em_cada_forma(self):
+        lote = lf.ler_planilha("a.csv", csv("chave;dia\nBANANA;11/11/2026\nGOIABA;2026-11-12\nMANGA;\nCAJU;amanhã\n"))
+        self.assertEqual([(i.chave, i.dia) for i in lote.itens],
+                         [("BANANA", dt.date(2026, 11, 11)), ("GOIABA", dt.date(2026, 11, 12)), ("MANGA", None)])
+        self.assertEqual(len(lote.erros), 1, lote.erros)
+        self.assertIn("linha 5: dia inválido", lote.erros[0])
+
 
 class Recusas(unittest.TestCase):
     def linha_com_erro(self, chave, folhas):
@@ -149,9 +169,70 @@ class Recusas(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mais de uma aba"):
             lf.ler_planilha("a.xlsx", xlsx([["chave", "folhas"], ["A", 1]], [["chave", "folhas"], ["B", 1]]))
 
-    def test_sem_a_coluna_folhas(self):
+    def test_sem_a_coluna_chave(self):
         with self.assertRaisesRegex(ValueError, "não achei"):
-            lf.ler_planilha("a.xlsx", xlsx([["chave"], ["BANANA"]]))
+            lf.ler_planilha("a.xlsx", xlsx([["folhas", "nome"], [3, "BANANA"]]))
+
+
+class Corte(unittest.TestCase):
+    """`ate_linha` é a última linha que entra, contada como o Excel mostra."""
+
+    def test_corta_na_linha_da_planilha(self):
+        conteudo = xlsx([["Programação"], ["chave", "folhas"], ["BANANA", 3], ["GOIABA", 2], ["MANGA", 1]])
+        for ate, chaves in ((2, []), (3, ["BANANA"]), (4, ["BANANA", "GOIABA"]), (5, ["BANANA", "GOIABA", "MANGA"]),
+                            (999, ["BANANA", "GOIABA", "MANGA"]), (None, ["BANANA", "GOIABA", "MANGA"])):
+            with self.subTest(ate=ate):
+                self.assertEqual([i.chave for i in lf.ler_planilha("a.xlsx", conteudo, ate).itens], chaves)
+
+    def test_o_que_vem_depois_do_corte_nem_e_lido(self):
+        lote = lf.ler_planilha("a.csv", csv("chave,folhas\nBANANA,3\nSALA2,x\n"), ate_linha=2)
+        self.assertEqual((lote.erros, [(i.chave, i.folhas) for i in lote.itens]), ([], [("BANANA", 3)]))
+
+    def test_corte_antes_da_primeira_chave_e_lote_vazio(self):
+        lote = lf.ler_planilha("a.csv", csv("chave,folhas\nBANANA,3\n"), ate_linha=1)
+        self.assertEqual(lote.itens, [])
+        self.assertIn(lf.SEM_CHAVES, lote.erros)
+
+
+class PlanilhaDosEncontros(unittest.TestCase):
+    """A planilha de controle dos EU 2026: key, tag e day, e nenhuma coluna de folhas."""
+    CABECALHO = ["day", "hour", "duration", "tag", "tag_check", "key", "key_trim", "key_check",
+                 "certificate", "certificate description"]
+
+    def ler(self, ate_linha=None):
+        d = dt.datetime
+        conteudo = xlsx([self.CABECALHO,
+                         [d(2026, 11, 11), dt.time(10), dt.timedelta(hours=2), "palestra01", "valid",
+                          "mangaba", "mangaba", "valid", "no", None],
+                         [d(2026, 11, 13), dt.time(13, 30), dt.timedelta(hours=1), "oficina02", "valid",
+                          "acerola", "acerola", "valid", "yes", "Descrição do certificado"],
+                         [None, None, dt.timedelta(hours=1), None, "error", "cajarana", "cajarana", "valid", None, None],
+                         [None, None, None, None, "error", "cupuacu", "cupuacu", "valid", None, None],
+                         [None, None, None, None, "error", None, None, None, None, None],
+                         [None, None, None, None, "error", None, None, None, None, None]],
+                        titulos={0: "eventos"})
+        return lf.ler_planilha("Controle de Frequência EU 2026.xlsx", conteudo, ate_linha)
+
+    def test_uma_folha_por_chave_com_tag_e_dia(self):
+        lote = self.ler()
+        self.assertEqual(lote.erros, [])
+        self.assertEqual([(i.linha, i.chave, i.folhas, i.nome, i.dia) for i in lote.itens], [
+            (2, "MANGABA", 1, "palestra01", dt.date(2026, 11, 11)),
+            (3, "ACEROLA", 1, "oficina02", dt.date(2026, 11, 13)),
+            (4, "CAJARANA", 1, None, None),
+            (5, "CUPUACU", 1, None, None)])
+
+    def test_linhas_so_com_a_formula_nao_viram_erro(self):
+        self.assertEqual(self.ler().erros, [])
+
+    def test_o_padrao_de_uma_folha_vira_alerta(self):
+        self.assertEqual(self.ler().alertas[0], lf.SEM_FOLHAS)
+
+    def test_ate_a_linha(self):
+        for ate, chaves in ((2, ["MANGABA"]), (4, ["MANGABA", "ACEROLA", "CAJARANA"]),
+                            (7, ["MANGABA", "ACEROLA", "CAJARANA", "CUPUACU"])):
+            with self.subTest(ate=ate):
+                self.assertEqual([i.chave for i in self.ler(ate).itens], chaves)
 
 
 class Alertas(unittest.TestCase):

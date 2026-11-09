@@ -42,7 +42,12 @@ O sistema exige login. As contas são criadas no terminal, e no Docker o comando
 `admin` vê tudo. `impressao` alcança só a tela de impressão.
 
 A tela **Impressão** edita os textos da folha, gera folhas avulsas e recebe a planilha de chaves
-(`chave` e `folhas`) para gerar o lote em um PDF. Imprima em A4, a 100%, sem ajustar à página.
+para gerar o lote em um PDF. A planilha precisa da coluna `chave` (ou `key`). Com a coluna
+`folhas`, cada chave sai na quantidade pedida; sem ela, sai uma folha por chave. As colunas `nome`
+(ou `tag`), `local`, `responsavel` e `dia` (ou `day`) são opcionais. O campo **Até a linha** gera
+só até aquela linha da planilha, contada como no Excel. O carimbo da folha leva o dia do evento,
+`v4 · DD/MM/AAAA`, ou só `v4` quando a linha não tem dia. Imprima em A4, a 100%, sem ajustar à
+página.
 
 Na tela **Folhas**, envie o PDF do escâner, mesmo com folhas de eventos diferentes. Cada folha é
 ligada ao evento pela chave. O que não combina com segurança fica marcado como *sem evento*, e
@@ -82,7 +87,7 @@ ao sistema principal, em "Cadastrar como eventos", para a leitura ter contra o q
 ```
 
 A bateria cobre a geração de folhas e chaves: geometria, chave, textos, planilha, PDF, API, o
-vínculo da folha com o evento e o `.exe` da impressão. Roda sem banco e sem dados reais, em cerca de 5 minutos. Com
+vínculo da folha com o evento e o `.exe` da impressão. Roda sem banco e sem dados reais, em cerca de 9 minutos. Com
 `OLHODIGITAL_TESTES_LENTOS=1` inclui as cargas de 520 e 2.000 páginas.
 
 ## Estrutura
@@ -95,6 +100,7 @@ vínculo da folha com o evento e o `.exe` da impressão. Roda sem banco e sem da
 | `experimento-fuzzy/` | correspondência aproximada, normalização e simulações |
 | `testes/` | bateria de testes da geração de folhas e chaves |
 | `impressao-windows/` | receita, fontes e ensaio do `.exe` da impressão |
+| `modelo-folha/` | modelo da folha para o Illustrator, gerado por `experimento-imagem/modelo_editavel.py`; um PDF que volta do editor só vai à impressora depois de `modelo_editavel.py conferir arquivo.pdf` |
 
 ## O que não está aqui
 

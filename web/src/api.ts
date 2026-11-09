@@ -222,9 +222,11 @@ export const api = {
       body: JSON.stringify({ chave, folhas }),
     }),
 
-  enviarPlanilha: (arquivo: File) => {
+  /** `ateLinha`: a última linha da planilha que entra no lote, como no Excel. */
+  enviarPlanilha: (arquivo: File, ateLinha?: number) => {
     const corpo = new FormData();
     corpo.append("arquivo", arquivo);
+    if (ateLinha !== undefined) corpo.append("ate_linha", String(ateLinha));
     return pedir<Lote>("/impressao/planilha", { method: "POST", body: corpo });
   },
 

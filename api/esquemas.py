@@ -324,6 +324,7 @@ class ItemLote(BaseModel):
     nome: str | None = None
     local: str | None = None
     responsavel: str | None = None
+    dia: date | None = None     # o dia do evento, que vai no carimbo da folha
 
 
 class LoteSaida(BaseModel):

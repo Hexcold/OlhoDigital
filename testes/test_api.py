@@ -103,6 +103,21 @@ class Planilha(Comum):
     def test_sem_arquivo(self):
         self.assertEqual(CLIENTE.post("/impressao/planilha").status_code, 422)
 
+    def test_ate_a_linha(self):
+        conteudo = b"chave,folhas\nBANANA,3\nGOIABA,2\nMANGA,1\n"
+        r = CLIENTE.post("/impressao/planilha", files={"arquivo": ("a.csv", conteudo)}, data={"ate_linha": "3"})
+        self.assertEqual((r.status_code, [i["chave"] for i in r.json()["itens"]]), (200, ["BANANA", "GOIABA"]))
+        for ruim in ("0", "-1", "abc", "1.5"):
+            with self.subTest(ate_linha=ruim):
+                r = CLIENTE.post("/impressao/planilha", files={"arquivo": ("a.csv", conteudo)}, data={"ate_linha": ruim})
+                self.assertEqual(r.status_code, 422)
+
+    def test_dia_vai_e_volta(self):
+        r = self.enviar("a.csv", "chave;dia\nBANANA;11/11/2026\nGOIABA;\n".encode())
+        self.assertEqual([(i["chave"], i["folhas"], i["dia"]) for i in r.json()["itens"]],
+                         [("BANANA", 1, "2026-11-11"), ("GOIABA", 1, None)])
+        self.assertEqual(r.json()["alertas"][0], lf.SEM_FOLHAS)
+
     def test_acima_do_limite(self):
         self.assertEqual(self.enviar("a.csv", b"x" * (5 * 1024 * 1024 + 1)).status_code, 413)
 
@@ -112,6 +127,13 @@ class Pdf(Comum):
         r = CLIENTE.post("/impressao/pdf", json={"itens": [{**ITEM, "folhas": 2}, {**ITEM, "linha": 3, "chave": "JABUTICABA"}]})
         self.assertEqual((r.status_code, r.content[:4]), (200, b"%PDF"))
         self.assertIn("2chaves_3paginas", r.headers["content-disposition"])
+
+    def test_gera_com_dia(self):
+        r = CLIENTE.post("/impressao/pdf", json={"itens": [{**ITEM, "dia": "2026-11-11"}]})
+        self.assertEqual((r.status_code, r.content[:4]), (200, b"%PDF"))
+        for ruim in ("amanhã", "2026-13-01", 5):
+            with self.subTest(dia=ruim):
+                self.assertEqual(CLIENTE.post("/impressao/pdf", json={"itens": [{**ITEM, "dia": ruim}]}).status_code, 422)
 
     def test_alerta(self):
         itens = [{**ITEM, "chave": "BANANA"}, {**ITEM, "linha": 3, "chave": "BANANO"}]

@@ -247,6 +247,10 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
   const [aviso, setAviso] = useState("");
   const [aceito, setAceito] = useState(false);
   const [ocupado, setOcupado] = useState("");
+  // o arquivo fica guardado para reler com outro corte sem escolher de novo
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [ateLinha, setAteLinha] = useState("");
+  const [corteLido, setCorteLido] = useState("");
 
   async function executar(nome: string, acao: () => Promise<void>) {
     setOcupado(nome);
@@ -261,11 +265,15 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
     }
   }
 
-  const enviar = (arquivo: File) =>
+  const enviar = (a: File, corte: string) =>
     executar("lendo", async () => {
       setLote(null);
       setAceito(false);
-      setLote(await api.enviarPlanilha(arquivo));
+      setArquivo(a);
+      setCorteLido(corte);
+      setLote(
+        await api.enviarPlanilha(a, corte.trim() ? Number(corte) : undefined),
+      );
     });
 
   const gerar = (l: Lote) =>
@@ -298,9 +306,13 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
     <section className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-base font-semibold">Planilha de chaves</h2>
       <p className="mt-1 text-sm text-slate-600">
-        Envie um <code>.xlsx</code> ou <code>.csv</code> com as colunas{" "}
-        <code>chave</code> e <code>folhas</code>. As colunas <code>nome</code>,{" "}
-        <code>local</code> e <code>responsavel</code> são opcionais.
+        Envie um <code>.xlsx</code> ou <code>.csv</code> com a coluna{" "}
+        <code>chave</code> (ou <code>key</code>) e, se quiser, <code>folhas</code>
+        . Sem <code>folhas</code>, sai uma folha por chave. As colunas{" "}
+        <code>nome</code> (ou <code>tag</code>), <code>local</code>,{" "}
+        <code>responsavel</code> e <code>dia</code> (ou <code>day</code>) são
+        opcionais. Com dia, o carimbo da folha sai “v4 · dia/mês/ano”; sem
+        ele, só “v4”.
       </p>
       <p className="mt-1 text-sm text-slate-600">
         A chave aceita só letras, até 16. As mais seguras impressas são B, D, E,
@@ -308,6 +320,19 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          Até a linha
+          <input
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            placeholder="todas"
+            value={ateLinha}
+            onChange={(e) => setAteLinha(e.target.value)}
+            className="w-24 rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-marca-500 focus:outline-none focus:ring-1 focus:ring-marca-500"
+          />
+        </label>
         <label className={`${BOTAO} cursor-pointer`}>
           {ocupado === "lendo" ? "lendo…" : "Enviar planilha"}
           <input
@@ -315,13 +340,23 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
             accept=".xlsx,.csv"
             className="sr-only"
             onChange={(e) => {
-              const arquivo = e.target.files?.[0];
+              const escolhido = e.target.files?.[0];
               // limpar permite reenviar o mesmo arquivo depois de corrigi-lo
               e.target.value = "";
-              if (arquivo) enviar(arquivo);
+              if (escolhido) enviar(escolhido, ateLinha);
             }}
           />
         </label>
+        {arquivo && ateLinha !== corteLido && (
+          <button
+            type="button"
+            className={BOTAO_SECUNDARIO}
+            disabled={!!ocupado}
+            onClick={() => enviar(arquivo, ateLinha)}
+          >
+            Aplicar o corte
+          </button>
+        )}
         <a className={BOTAO_SECUNDARIO} href={api.urlModeloPlanilha()}>
           Baixar modelo
         </a>
@@ -333,6 +368,8 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
         <div className="mt-4">
           <p className="text-sm font-medium">
             {lote.total_chaves} chave(s), {lote.total_folhas} folha(s)
+            {corteLido.trim() && ` · até a linha ${corteLido.trim()}`}
+            {arquivo && ` · ${arquivo.name}`}
           </p>
 
           {lote.erros.length > 0 && (
@@ -375,6 +412,7 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
                   <th className="py-1 pr-3 font-medium">Chave</th>
                   <th className="py-1 pr-3 font-medium">Folhas</th>
                   <th className="py-1 pr-3 font-medium">Nome</th>
+                  <th className="py-1 pr-3 font-medium">Dia</th>
                   <th className="py-1 font-medium">Local</th>
                 </tr>
               </thead>
@@ -385,6 +423,9 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
                     <td className="py-1 pr-3 font-mono">{i.chave}</td>
                     <td className="py-1 pr-3">{i.folhas}</td>
                     <td className="py-1 pr-3">{i.nome ?? "—"}</td>
+                    <td className="py-1 pr-3">
+                      {i.dia ? i.dia.split("-").reverse().join("/") : "—"}
+                    </td>
                     <td className="py-1">{i.local ?? "—"}</td>
                   </tr>
                 ))}

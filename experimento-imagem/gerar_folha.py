@@ -27,6 +27,7 @@ O sistema de coordenadas é o MILÍMETRO, sempre. A folha é um objeto físico; 
 """
 
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 import os
 import subprocess
@@ -149,6 +150,12 @@ RECUO_CELULA_MM = 0.0
 # o LAYOUT dizia 24: sem carimbo, uma pilha de folhas é indistinguível de outra,
 # e recortar com o modelo errado não dá erro, dá recorte torto.
 VERSAO_FOLHA = "v4 · 2026-08-27"
+
+# Decisão do autor, 09/11/2026: na folha impressa, a data do carimbo é o DIA DO
+# EVENTO, que vem da planilha, e não a data da versão. O "v4" fica, porque é ele que
+# diz a geometria (A43). A v4 congelada continua com VERSAO_FOLHA: é a referência do
+# portão de pixels (D11), não uma folha que vai para a coleta.
+GEOMETRIA_FOLHA = "v4"
 
 FONTE = "DejaVu Sans, Verdana, sans-serif"
 
@@ -436,6 +443,26 @@ def area_cabecalho(layout: Layout = LAYOUT) -> tuple[float, float, float, float]
             layout.ref_x0 + layout.ref_larg - recuo, layout.y_instrucoes - 1.0)
 
 
+def texto_carimbo(dia: date | None = None) -> str:
+    """O carimbo de uma folha impressa: a geometria e, havendo, o dia do evento.
+
+    DD/MM/AAAA porque é assim que a planilha mostra a data. Sem dia, como nas
+    chaves de reserva, sai só a geometria.
+    """
+    return f"{GEOMETRIA_FOLHA} · {dia:%d/%m/%Y}" if dia else GEOMETRIA_FOLHA
+
+
+def area_carimbo(layout: Layout = LAYOUT) -> tuple[float, float, float, float]:
+    """(x0, y0, x1, y1) em mm: a sobra à direita da instrução, onde o carimbo mora.
+
+    É a faixa que `areas_editaveis` reserva fora da instrução. Fica abaixo da zona
+    de silêncio do marcador de cima e acima do rótulo da chave.
+    """
+    L = layout
+    x1 = L.ref_x0 + L.ref_larg + 0.5
+    return (x1 - RESERVA_CARIMBO_MM, L.y_instrucoes, x1, L.y_instrucoes + 5.0)
+
+
 def _x_data(layout: Layout) -> float:
     """Início da banda DATA, alinhada à direita da tabela."""
     separador = SEPARADOR_DATA_CELULAS * layout.lado_celula
@@ -534,7 +561,8 @@ def _svg_instrucao(cabecalho: Cabecalho, layout: Layout, y: float) -> list[str]:
 
 
 def desenhar_svg(layout: Layout = LAYOUT, chave: str = "",
-                cabecalho: Cabecalho | None = None) -> str:
+                cabecalho: Cabecalho | None = None,
+                carimbo: str | None = None) -> str:
     """Monta o SVG da folha.
 
     `chave` vazia deixa as células da banda em branco, para alguém escrever à
@@ -567,7 +595,11 @@ def desenhar_svg(layout: Layout = LAYOUT, chave: str = "",
 
     # carimbo de versão, na sobra à direita da instrução: não custa linha de
     # tabela, e é o que torna uma pilha de folhas identificável depois
-    p.append(_texto(L.ref_x0 + L.ref_larg, L.y_instrucoes + 3.0, VERSAO_FOLHA,
+    # `carimbo` None mantém o da versão, e com ele a v4 congelada byte a byte. A
+    # impressão passa `texto_carimbo(dia)`, e `lote_folhas` confere que ele não
+    # sai da caixa dele.
+    p.append(_texto(L.ref_x0 + L.ref_larg, L.y_instrucoes + 3.0,
+                    VERSAO_FOLHA if carimbo is None else carimbo,
                     2.6, COR_ROTULO, "normal", "end"))
 
     y = L.y_instrucoes + 3.0
@@ -645,7 +677,7 @@ def desenhar_svg(layout: Layout = LAYOUT, chave: str = "",
 
 
 def gerar(caminho_pdf: str, chave: str = "",
-          cabecalho: Cabecalho | None = None) -> str:
+          cabecalho: Cabecalho | None = None, carimbo: str | None = None) -> str:
     """Escreve o SVG ao lado e converte para PDF com rsvg-convert.
 
     O programa recebe a pasta em `cwd` e só o nome do arquivo: no Windows, um
@@ -654,7 +686,7 @@ def gerar(caminho_pdf: str, chave: str = "",
     pasta, nome_pdf = os.path.split(os.path.abspath(caminho_pdf))
     nome_svg = os.path.splitext(nome_pdf)[0] + ".svg"
     with open(os.path.join(pasta, nome_svg), "w", encoding="utf-8") as f:
-        f.write(desenhar_svg(chave=chave, cabecalho=cabecalho))
+        f.write(desenhar_svg(chave=chave, cabecalho=cabecalho, carimbo=carimbo))
     subprocess.run(["rsvg-convert", "--format=pdf", "--output", nome_pdf, nome_svg],
                    cwd=pasta, check=True)
     return caminho_pdf

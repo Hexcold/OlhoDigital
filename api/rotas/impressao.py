@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from ..config import config
@@ -106,13 +106,15 @@ def planilha_modelo() -> Response:
 
 
 @rotas.post("/planilha", response_model=LoteSaida)
-def enviar_planilha(arquivo: UploadFile = File(...)) -> LoteSaida:
+def enviar_planilha(arquivo: UploadFile = File(...),
+                    ate_linha: int | None = Form(None, ge=1)) -> LoteSaida:
+    """`ate_linha`: a última linha da planilha que entra no lote, como o Excel mostra."""
     lf = _lote()
     conteudo = arquivo.file.read(LIMITE_PLANILHA_BYTES + 1)
     if len(conteudo) > LIMITE_PLANILHA_BYTES:
         raise HTTPException(413, "a planilha passa de 5 MB")
     try:
-        lote = lf.ler_planilha(arquivo.filename or "", conteudo)
+        lote = lf.ler_planilha(arquivo.filename or "", conteudo, ate_linha)
     except ValueError as erro:
         raise HTTPException(422, str(erro)) from erro
     return LoteSaida(itens=[ItemLote(**asdict(i)) for i in lote.itens],

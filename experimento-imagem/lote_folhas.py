@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import csv
+import datetime as dt
 import io
 import itertools
 import json
@@ -76,15 +77,19 @@ LIMITE_PAGINAS = 2000
 LINHAS_PROCURADAS = 10   # planilha real costuma ter título acima do cabeçalho
 SEM_CHAVES = "o lote não tem nenhuma chave"
 
+# KEY, TAG e DAY são os nomes da planilha de controle dos Encontros, que não tem
+# coluna de folhas: ver `ler_planilha`.
 SINONIMOS = {
-    "chave": {"CHAVE", "CHAVES", "CHAVE DO EVENTO", "CHAVE DA FOLHA"},
+    "chave": {"CHAVE", "CHAVES", "CHAVE DO EVENTO", "CHAVE DA FOLHA", "KEY"},
     "folhas": {"FOLHAS", "FOLHA", "QUANTIDADE", "QUANT", "QTD", "QTDE",
                "QUANTIDADE DE FOLHAS", "NUMERO DE FOLHAS", "N DE FOLHAS",
                "TOTAL DE FOLHAS", "FOLHAS POR CHAVE"},
-    "nome": {"NOME", "NOME DO EVENTO", "EVENTO", "ATIVIDADE", "TITULO"},
+    "nome": {"NOME", "NOME DO EVENTO", "EVENTO", "ATIVIDADE", "TITULO", "TAG"},
     "local": {"LOCAL", "SALA"},
     "responsavel": {"RESPONSAVEL"},
+    "dia": {"DIA", "DAY", "DATA", "DATA DO EVENTO", "DIA DO EVENTO"},
 }
+SEM_FOLHAS = "a planilha não tem a coluna 'folhas': sai uma folha por chave"
 
 
 class AlertasPendentes(Exception):
@@ -104,6 +109,7 @@ class ItemLote:
     nome: str | None = None
     local: str | None = None
     responsavel: str | None = None
+    dia: dt.date | None = None          # vai no carimbo da folha
 
 
 @dataclass
@@ -158,21 +164,29 @@ def _raster(svg: str, dpi: int) -> np.ndarray:
     return cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_GRAYSCALE)
 
 
-@lru_cache(maxsize=4)
-def _folha_congelada(dpi: int) -> np.ndarray:
-    """A v4 nunca muda, e rasterizá-la era metade do tempo de cada prévia."""
-    return _raster(gf.desenhar_svg(), dpi)
+@lru_cache(maxsize=16)
+def _folha_congelada(dpi: int, carimbo: str | None = None) -> np.ndarray:
+    """A v4 nunca muda, e rasterizá-la era metade do tempo de cada prévia.
+
+    Com `carimbo`, é a v4 com aquele carimbo: um por dia de evento no lote.
+    """
+    return _raster(gf.desenhar_svg(carimbo=carimbo), dpi)
 
 
-def _conferir_svg(svg: str, dpi: int = 200) -> dict:
-    """Compara com a folha congelada, pixel a pixel, fora das áreas editáveis."""
-    referencia = _folha_congelada(dpi)
+def _conferir_svg(svg: str, dpi: int = 200, carimbo: str | None = None,
+                  areas: list | None = None) -> dict:
+    """Compara com a folha congelada, pixel a pixel, fora das áreas editáveis.
+
+    A referência é desenhada com o mesmo `carimbo` da folha conferida: assim o
+    carimbo segue travado, e qualquer outro desenho sobre ele é recusado.
+    """
+    referencia = _folha_congelada(dpi, carimbo)
     nova = _raster(svg, dpi)
     if nova.shape != referencia.shape:
         raise ValueError("os textos mudaram o tamanho da folha")
     mudou = referencia != nova
     dentro = int(mudou.sum())
-    for area in gf.areas_editaveis():
+    for area in gf.areas_editaveis() if areas is None else areas:
         x0, y0, x1, y1 = (round(v * dpi / 25.4) for v in area)
         mudou[y0:y1, x0:x1] = False
     fora = int(mudou.sum())
@@ -182,14 +196,27 @@ def _conferir_svg(svg: str, dpi: int = 200) -> dict:
     return {"pixels_mudados": dentro, "pixels_fora": fora}
 
 
-def conferir_cabecalho(cabecalho: gf.Cabecalho, dpi: int = 200) -> dict:
+def conferir_cabecalho(cabecalho: gf.Cabecalho, dpi: int = 200,
+                       carimbo: str | None = None) -> dict:
     """Portão de D16: o que o sistema lê tem que sair idêntico à v4.
 
     Compara o que foi desenhado em vez de confiar na conta de largura: a garantia
     passa a vir da folha, e pega também o defeito que ninguém previu. A 200 dpi,
     que é a resolução do escâner da coleta.
+
+    Com `carimbo`, confere antes que ele só mexe na caixa dele. É o único texto da
+    parte travada que muda de uma folha para outra (o dia do evento), e mora ao
+    lado do marcador 1.
     """
-    return _conferir_svg(gf.desenhar_svg(cabecalho=cabecalho), dpi)
+    if carimbo is not None:
+        try:
+            _conferir_svg(gf.desenhar_svg(carimbo=carimbo), dpi,
+                          areas=[gf.area_carimbo()])
+        except ValueError as erro:
+            raise ValueError(f"o carimbo {carimbo!r} sai da caixa dele: "
+                             f"{erro}") from erro
+    return _conferir_svg(gf.desenhar_svg(cabecalho=cabecalho, carimbo=carimbo),
+                         dpi, carimbo)
 
 
 def previa_png(cabecalho: gf.Cabecalho, chave: str = "", dpi: int = 110) -> bytes:
@@ -198,7 +225,9 @@ def previa_png(cabecalho: gf.Cabecalho, chave: str = "", dpi: int = 110) -> byte
     Usa o renderizador da impressão, não HTML: a prévia precisa mostrar o que
     vai sair no papel, inclusive quando o texto encolhe para caber.
     """
-    img = _raster(gf.desenhar_svg(chave=chave, cabecalho=cabecalho), dpi)
+    # sem dia, o carimbo que a folha avulsa leva; o do lote só muda a data
+    img = _raster(gf.desenhar_svg(chave=chave, cabecalho=cabecalho,
+                                  carimbo=gf.texto_carimbo()), dpi)
     corte = round((gf.LAYOUT.tab_y0 + 3 * gf.LAYOUT.lado_celula) * dpi / 25.4)
     return cv2.imencode(".png", img[:corte])[1].tobytes()
 
@@ -229,8 +258,10 @@ def _tabelas(nome_arquivo: str, conteudo: bytes) -> list[tuple[str, list[list]]]
     raise ValueError(f"formato {extensao or 'desconhecido'}: envie .xlsx ou .csv")
 
 
-def _achar_cabecalho(linhas: list[list]) -> tuple[int, dict[str, int]] | None:
-    """(índice da linha de cabeçalho, coluna de cada campo), ou None.
+def _achar_cabecalho(linhas: list[list], exigidos: set[str]
+                     ) -> tuple[int, dict[str, int]] | None:
+    """(índice da primeira linha que tem os campos `exigidos`, coluna de cada
+    campo), ou None.
 
     Colunas pelo nome, não pela posição, como em `base_alunos`: quem monta a
     planilha acrescenta coluna sem avisar.
@@ -244,9 +275,26 @@ def _achar_cabecalho(linhas: list[list]) -> tuple[int, dict[str, int]] | None:
             for campo, nomes in SINONIMOS.items():
                 if texto in nomes and campo not in mapa:
                     mapa[campo] = j
-        if {"chave", "folhas"} <= set(mapa):
+        if exigidos <= set(mapa):
             return i, mapa
     return None
+
+
+def _data(valor) -> dt.date | None:
+    """O dia do evento, que vai no carimbo. O Excel entrega datetime; o CSV, texto."""
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    if isinstance(valor, dt.datetime):      # antes de `date`, que é a classe-mãe
+        return valor.date()
+    if isinstance(valor, dt.date):
+        return valor
+    if isinstance(valor, str):
+        for formato in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return dt.datetime.strptime(valor.strip(), formato).date()
+            except ValueError:
+                pass
+    raise ValueError(f"dia inválido: {valor!r}. Use DD/MM/AAAA")
 
 
 def _inteiro(valor) -> int | None:
@@ -271,35 +319,53 @@ def _texto_opcional(linha: list, coluna: int | None) -> str | None:
     return str(linha[coluna]).strip() or None
 
 
-def ler_planilha(nome_arquivo: str, conteudo: bytes) -> Lote:
+def ler_planilha(nome_arquivo: str, conteudo: bytes,
+                 ate_linha: int | None = None) -> Lote:
     """Lê `chave × folhas`. Linha ruim vira erro com número da linha.
 
     Falha só quando não há o que ler. Fora disso devolve tudo que achou, para a
     pessoa corrigir os problemas de uma vez e não um por envio.
+
+    Sem a coluna de folhas, como na planilha de controle dos Encontros, sai uma
+    folha por chave, e um alerta diz isso. `ate_linha` é a última linha que entra
+    no lote, contada como o Excel mostra: o que vem depois nem é lido.
     """
-    tabelas = [(rotulo, linhas, achado) for rotulo, linhas in
-               _tabelas(nome_arquivo, conteudo)
-               if (achado := _achar_cabecalho(linhas))]
+    abas = _tabelas(nome_arquivo, conteudo)
+    # Primeiro o formato completo, depois só a chave: um título "Chave do evento"
+    # acima de `chave | folhas` não pode fazer a coluna de folhas sumir da leitura.
+    for exigidos in ({"chave", "folhas"}, {"chave"}):
+        tabelas = [(rotulo, linhas, achado) for rotulo, linhas in abas
+                   if (achado := _achar_cabecalho(linhas, exigidos))]
+        if tabelas:
+            break
     if not tabelas:
-        raise ValueError("não achei as colunas 'chave' e 'folhas' nas primeiras "
+        raise ValueError("não achei a coluna 'chave' nas primeiras "
                          f"{LINHAS_PROCURADAS} linhas da planilha")
     if len(tabelas) > 1:
         # ambíguo é erro, não chute: imprimir a aba errada desperdiça o lote
-        raise ValueError("mais de uma aba tem 'chave' e 'folhas': "
+        raise ValueError(f"mais de uma aba tem a coluna 'chave': "
                          f"{', '.join(t[0] for t in tabelas)}. Deixe só uma")
 
     _, linhas, (cabecalho, col) = tabelas[0]
+    sem_folhas = "folhas" not in col
     itens: list[ItemLote] = []
     erros: list[str] = []
     for i, linha in enumerate(linhas[cabecalho + 1:], start=cabecalho + 2):
+        if ate_linha is not None and i > ate_linha:
+            break
         bruta = linha[col["chave"]] if col["chave"] < len(linha) else None
-        qtd = linha[col["folhas"]] if col["folhas"] < len(linha) else None
         vazia = bruta is None or not str(bruta).strip()
-        if vazia and (qtd is None or not str(qtd).strip()):
-            continue
-        if vazia:
-            erros.append(f"linha {i}: tem quantidade, mas não tem chave")
-            continue
+        if sem_folhas:
+            if vazia:
+                continue
+            qtd = 1
+        else:
+            qtd = linha[col["folhas"]] if col["folhas"] < len(linha) else None
+            if vazia and (qtd is None or not str(qtd).strip()):
+                continue
+            if vazia:
+                erros.append(f"linha {i}: tem quantidade, mas não tem chave")
+                continue
         try:
             chave = gf.validar_chave(str(bruta))
         except ValueError as erro:
@@ -310,15 +376,27 @@ def ler_planilha(nome_arquivo: str, conteudo: bytes) -> Lote:
             erros.append(f"linha {i}: quantidade de folhas inválida para "
                          f"{chave}: {qtd!r}")
             continue
+        coluna_dia = col.get("dia")
+        try:
+            dia = _data(linha[coluna_dia] if coluna_dia is not None
+                        and coluna_dia < len(linha) else None)
+        except ValueError as erro:
+            erros.append(f"linha {i}: {erro}")
+            continue
         itens.append(ItemLote(i, chave, folhas,
                               _texto_opcional(linha, col.get("nome")),
                               _texto_opcional(linha, col.get("local")),
-                              _texto_opcional(linha, col.get("responsavel"))))
+                              _texto_opcional(linha, col.get("responsavel")),
+                              dia))
 
     erros_lote, alertas = validar_lote(itens)
     if erros and not itens:
         # toda linha já tem o seu erro: "o lote não tem chave" só repetiria
         erros_lote = [e for e in erros_lote if e != SEM_CHAVES]
+    if sem_folhas and itens:
+        # Uma folha por chave é um padrão, e padrão não pode passar despercebido:
+        # a tela pede confirmação de todo alerta antes de gerar.
+        alertas.insert(0, SEM_FOLHAS)
     return Lote(itens, erros + erros_lote, alertas)
 
 
@@ -388,22 +466,29 @@ def planilha_modelo() -> bytes:
 
 # --- PDF ---------------------------------------------------------------------
 
-def _montar_pdf(pedidos: list[tuple[str, int]], cabecalho: gf.Cabecalho,
-                saida: str) -> dict:
+def _montar_pdf(pedidos: list[tuple[str, int, dt.date | None]],
+                cabecalho: gf.Cabecalho, saida: str) -> dict:
     """Desenha uma folha por chave, confere, e repete as páginas em sequência.
 
-    A detecção completa, nas 5 resoluções de D10, roda uma vez. Nas demais
-    chaves roda só a 200 dpi: a chave é escrita dentro da banda, longe dos
+    A detecção completa, nas 5 resoluções de D10, roda na primeira folha de cada
+    carimbo, porque ele mora ao lado do marcador 1 e muda com o dia do evento.
+    Nas demais roda só a 200 dpi: a chave é escrita dentro da banda, longe dos
     marcadores, e isso deixa o lote em segundos em vez de minutos.
     """
-    conferir_cabecalho(cabecalho)
+    # Todo portão antes da primeira folha: um dia que não passa não deixa sair
+    # meio lote.
+    for carimbo in sorted({gf.texto_carimbo(dia) for _, _, dia in pedidos}):
+        conferir_cabecalho(cabecalho, carimbo=carimbo)
+    completos: set[str] = set()
     with tempfile.TemporaryDirectory() as tmp:
         paginas: list[str] = []
-        for i, (chave, folhas) in enumerate(pedidos):
+        for i, (chave, folhas, dia) in enumerate(pedidos):
+            carimbo = gf.texto_carimbo(dia)
             nome = f"{i:04d}.pdf"
             pdf = os.path.join(tmp, nome)
-            gf.gerar(pdf, chave, cabecalho)
-            dpis = (150, 200, 300, 400, 600) if i == 0 else (200,)
+            gf.gerar(pdf, chave, cabecalho, carimbo)
+            dpis = (200,) if carimbo in completos else (150, 200, 300, 400, 600)
+            completos.add(carimbo)
             for dpi, ids in gf.conferir_deteccao(pdf, dpis).items():
                 if not set(ids) >= {0, 1, 2, 3}:
                     raise ValueError(f"a folha de {chave or 'chave em branco'} "
@@ -427,7 +512,8 @@ def gerar_pdf(itens: list[ItemLote], cabecalho: gf.Cabecalho, saida: str,
         raise ValueError("; ".join(erros))
     if alertas and not aceitar_alertas:
         raise AlertasPendentes(alertas)
-    return _montar_pdf([(i.chave, i.folhas) for i in itens], cabecalho, saida)
+    return _montar_pdf([(i.chave, i.folhas, i.dia) for i in itens], cabecalho,
+                       saida)
 
 
 def gerar_avulsas(chave: str, folhas: int, cabecalho: gf.Cabecalho,
@@ -440,7 +526,7 @@ def gerar_avulsas(chave: str, folhas: int, cabecalho: gf.Cabecalho,
     if not 1 <= folhas <= LIMITE_PAGINAS:
         raise ValueError(f"a quantidade de folhas tem que ficar entre 1 e "
                          f"{LIMITE_PAGINAS}")
-    return _montar_pdf([(chave, folhas)], cabecalho, saida)
+    return _montar_pdf([(chave, folhas, None)], cabecalho, saida)
 
 
 if __name__ == "__main__":
@@ -568,8 +654,18 @@ if __name__ == "__main__":
             texto = subprocess.run(["pdftotext", "-layout", um, "-"],
                                    capture_output=True, text=True, check=True).stdout
             assert resumo["paginas"] == folhas and ("B A N A N A" in texto) == bool(chave)
-            assert "DATA" not in texto and gf.VERSAO_FOLHA in texto
+            # avulsa não tem dia: o carimbo é só a geometria, nunca a data da versão
+            assert "DATA" not in texto and gf.VERSAO_FOLHA not in texto
+            assert texto.count(gf.texto_carimbo()) == folhas
         print("  folhas avulsas, com chave e em branco: ok")
+
+        gerar_pdf([ItemLote(2, "BANANA", 1, dia=dt.date(2026, 11, 11)),
+                   ItemLote(3, "GOIABA", 1)], eu, um)
+        texto = subprocess.run(["pdftotext", "-layout", um, "-"],
+                               capture_output=True, text=True, check=True).stdout
+        com_dia, sem_dia = texto.split("\f")[:2]
+        assert "v4 · 11/11/2026" in com_dia and "/2026" not in sem_dia, texto
+        print("  carimbo com o dia do evento, e só v4 sem ele: ok")
         falha_com("só A-Z", gerar_avulsas, "SALA2", 1, eu, um)
         falha_com("quantidade", gerar_avulsas, "BANANA", 0, eu, um)
 
