@@ -154,6 +154,8 @@ def _ler_e_gravar(folha_id: int) -> None:
         folha.theta = ponto["theta"]
         folha.delta = ponto["delta"]
         folha.metrica_nome = ponto["metrica_nome"]
+        folha.tau_nome = ponto["tau_nome"]
+        folha.recorte = ponto["recorte"]
         folha.modelo_matricula = recursos["modelo_matricula"]
         folha.modelo_letras = recursos["modelo_letras"]
         _vincular_evento(db, folha)
@@ -382,8 +384,9 @@ def linhas(folha_id: int,
         from fuzzy import THETA, DELTA                            # noqa: E402
     theta = folha.theta if folha.theta is not None else THETA
     delta = folha.delta if folha.delta is not None else DELTA
+    # o τ é o da folha, nulo se ela foi lida antes da regra dos dois canais (D23)
     return [montar_linha(l, sorted(_variacoes(l.matricula_sugerida) & reais),
-                         theta, delta)
+                         theta, delta, folha.tau_nome)
             for l in achadas]
 
 
@@ -551,6 +554,7 @@ def baixar_json(folha_id: int, db: Session = Depends(dependencia_sessao)):
         "ponto_de_operacao": {
             "alpha": folha.alpha, "theta": folha.theta, "delta": folha.delta,
             "metrica_nome": folha.metrica_nome,
+            "tau_nome": folha.tau_nome, "recorte": folha.recorte,
             "modelo_matricula": folha.modelo_matricula,
             "modelo_letras": folha.modelo_letras,
         },

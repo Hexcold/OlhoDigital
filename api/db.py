@@ -50,6 +50,8 @@ def criar_tabelas() -> None:
     # não pode ser recriado para ganhar uma coluna.
     with engine.begin() as conexao:
         for coluna, tipo in (("chave_lida", "VARCHAR(16)"),
-                             ("origem_vinculo", "VARCHAR(20)")):
+                             ("origem_vinculo", "VARCHAR(20)"),
+                             ("tau_nome", "DOUBLE PRECISION"),
+                             ("recorte", "VARCHAR(10)")):
             conexao.execute(text(f"ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
                                  f"{coluna} {tipo}"))

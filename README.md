@@ -14,11 +14,13 @@ do Prof. Dr. David Sena Oliveira.
 ## Como funciona
 
 1. A folha é gerada por código, com marcadores ArUco e grade de células.
-2. A imagem digitalizada é retificada pelos marcadores e cortada em células.
+2. A imagem digitalizada é retificada pelos marcadores e cortada em células. A grade, impressa em
+   cinza, sai pelo tom: o traço que a pessoa apoia na linha é mais escuro que ela e fica.
 3. Duas CNNs derivadas da LeNet-5 leem um caractere por célula: dígitos na matrícula, letras no nome.
 4. A leitura é comparada com a base por correspondência aproximada de strings.
-5. O registro só é aceito se o escore for alto e abrir margem sobre o segundo colocado. Caso
-   contrário, vai para a quarentena. Nada é descartado.
+5. O registro só é aceito se o escore for alto, abrir margem sobre o segundo colocado, a matrícula
+   estiver preenchida e, quando ela não bate exatamente, o nome a confirmar. Caso contrário, vai
+   para a quarentena. Nada é descartado.
 
 ## Como rodar
 

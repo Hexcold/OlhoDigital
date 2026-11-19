@@ -39,7 +39,14 @@ CURINGA = "?"
 METRICA_NOME = "partial"
 ALPHA = 0.5
 THETA = 0.60
-DELTA = 0.05
+# D23: δ e τ do braço "V3 + regra", escolhidos pelo critério do Experimento 03 na calibração e
+# congelados antes de abrir o teste, onde fizeram 583 aceites e 0 erros (A58). Eram δ = 0,05 e
+# sem regra. Valem para a leitura com o recorte V3 e o nome pela CNN afinada, que é a configuração
+# em que foram medidos.
+DELTA = 0.08
+# A regra dos dois canais (A57): aceite exige a matrícula exata OU o nome do campeão ≥ τ. Barra o
+# impostor de fora da base cuja matrícula cai a um dígito de alguém de dentro e cujo nome casa mal.
+TAU_NOME = 0.65
 
 
 def dist_levenshtein(s1: str, s2: str) -> int:
@@ -108,11 +115,23 @@ SIM_NOME = {
 
 def identificar(matricula_lida: str, nome_lido: str, base: list[dict],
                 alpha: float = ALPHA, theta: float = THETA,
-                delta: float = DELTA, sim_nome=None) -> dict:
+                delta: float = DELTA, sim_nome=None,
+                matricula_completa: bool = True,
+                tau_nome: float | None = None) -> dict:
     """Compara a leitura contra todos os candidatos da base.
 
     Score composto: alpha*sim_matricula + (1-alpha)*sim_nome.
-    Aceito sse melhor score >= theta E margem sobre o vice >= delta.
+    Aceito sse melhor score >= theta E margem sobre o vice >= delta E a
+    matrícula foi preenchida inteira (D22). Este módulo só vê a cadeia lida, e
+    nela um '?' pode ser célula em branco ou dígito incerto (modo abstém); quem
+    sabe a diferença é a célula, então quem chama informa `matricula_completa`
+    (`identificar_folha.Linha.matricula_completa`). Sem a regra, seis curingas
+    casam com a base inteira e o nome decide sozinho (A59).
+
+    `tau_nome` liga a regra dos dois canais (D23): o campeão só é aceito com a
+    matrícula exata ou o nome dele ≥ τ. Fica desligada por padrão porque a
+    simulação do TCC 1 (`experimento.py`, `exp2_protocolo.py`) chama esta função
+    com os padrões; quem aplica a regra é o gate do pipeline, com `TAU_NOME`.
 
     `sim_nome` recebe uma entrada de `SIM_NOME`, que já traz a semântica do '?'
     junto. Passar uma métrica crua do rapidfuzz aqui é o descasamento que A24
@@ -138,7 +157,13 @@ def identificar(matricula_lida: str, nome_lido: str, base: list[dict],
             vice_score = score
 
     margem = melhor_score - vice_score
-    aceito = melhor_score >= theta and margem >= delta
+    # o nome do campeão é calculado de novo, e não tirado do laço: com alpha = 1 o
+    # laço não calcula nome, e a regra tem que valer igual à do pipeline
+    dois_canais = (tau_nome is None
+                   or sim_levenshtein(matricula_lida, melhor["matricula"]) >= 0.999
+                   or sim_nome(nome_lido, melhor["nome"]) >= tau_nome)
+    aceito = (melhor_score >= theta and margem >= delta and matricula_completa
+              and dois_canais)
     return {"aluno": melhor, "score": melhor_score,
             "margem": margem, "decisao": "aceito" if aceito else "quarentena"}
 

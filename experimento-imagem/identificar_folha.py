@@ -55,6 +55,8 @@ import os
 import sys
 import time
 
+import cv2
+
 from image import Image
 from align import Align
 from ocr import OCR
@@ -67,7 +69,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "experimento-fuzzy
 from base_alunos import carregar_base                     # noqa: E402
 from normalizacao import normalizar                       # noqa: E402
 from fuzzy import (sim_levenshtein, identificar, SIM_NOME,     # noqa: E402
-                   METRICA_NOME, ALPHA, THETA, DELTA)
+                   METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME)
+import recorte_celula                                     # noqa: E402
+
+# Os recortes de célula que `processar_folha` sabe fazer. "v0" é o de sempre, e o padrão aqui
+# para os experimentos reproduzirem o que mediram; o servidor pede "v3" (D23, A56).
+RECORTES = ("v0", "v3")
 
 BASE_XLSX = "../experimento-fuzzy/dados/Lista de Alunos Campus Quixadá.xlsx"
 SAIDA = "dados/identificacao_folhas.json"
@@ -266,6 +273,24 @@ class Linha:
         return any(c.motivo == "anulada"
                    for c in (*self.celulas, *self.celulas_nome))
 
+    @property
+    def matricula_completa(self) -> bool:
+        """As 6 células da matrícula têm tinta — a condição do D22 para aceitar.
+
+        Célula vazia na matrícula vira '?', o curinga de D02, que casa com
+        qualquer dígito. Com a matrícula inteira em branco são seis curingas:
+        sim_mat = 1,000 contra a base inteira, e a linha fica decidida só pelo
+        nome. Foi assim que uma linha VAZIA, com 3 letras de resíduo de grade no
+        nome, virou pessoa no teste do Experimento 03 (A59). O nome não precisa
+        da regra simétrica: nome vazio vale 0, e com θ > α a matrícula sozinha
+        não passa no gate.
+
+        Olha a TINTA, não o '?' da leitura: no modo abstém o '?' também marca
+        dígito escrito e incerto, e essa abstenção é legítima (D02). Célula
+        'sem_caixa' tem tinta e conta como preenchida.
+        """
+        return all(c.motivo != "vazia" for c in self.celulas)
+
 
 @dataclass
 class Chave:
@@ -319,13 +344,20 @@ class Chave:
         return self.com_tinta == 0
 
 
-def _reconhecer(celulas: list[Image], ocr: OCR) -> list[Celula]:
+def _reconhecer(celulas: list[Image], ocr: OCR, cinza=None,
+                caixas: list[tuple[int, int, int, int]] | None = None) -> list[Celula]:
     """Binariza, filtra e classifica as células de uma coluna, em duas fases.
 
     A separação existe por custo: classificar uma célula por vez contra as 151k
     referências do EMNIST dá 204 ms cada; em lote, 3,0 ms. Então a primeira
     fase decide o que precisa de classificador, e a segunda chama o KNN uma vez
     só para todas — ver `OCR.prever_lote`.
+
+    Com `cinza` (a folha alinhada em tons de cinza) e as `caixas` das células, a
+    imagem que vai para o classificador sai do recorte V3 (`recorte_celula`, D23),
+    que tira a grade pela tinta em vez do corte cego de borda. Vazia e anulada
+    continuam decididas pelo recorte de sempre, como no braço medido no teste do
+    Experimento 03 — então o conjunto de linhas não muda com o recorte.
     """
     saida: list[Celula | None] = []
     pendentes, posicoes = [], []
@@ -343,6 +375,9 @@ def _reconhecer(celulas: list[Image], ocr: OCR) -> list[Celula]:
         if filtrada.get_image().is_empty():
             saida.append(Celula(None, 0.0, "vazia"))
             continue
+
+        if cinza is not None:
+            filtrada = recorte_celula.filtrar(*recorte_celula.limpar(cinza, caixas[i]))
 
         saida.append(None)          # preenchida na segunda fase
         pendentes.append(filtrada)
@@ -362,13 +397,16 @@ def ler_linha(celulas: list[Image], ocr: OCR, folha: str, numero: int,
               celulas_nome: list[Image] | None = None,
               ocr_letras: OCR | None = None,
               corte_nome: float = UNANIME,
-              corte_matricula: float = UNANIME) -> Linha:
-    """Reconhece a matrícula e, se houver classificador de letras, o nome."""
+              corte_matricula: float = UNANIME,
+              cinza=None, caixas=None, caixas_nome=None) -> Linha:
+    """Reconhece a matrícula e, se houver classificador de letras, o nome.
+
+    `cinza` e as caixas ligam o recorte V3 — ver `_reconhecer`."""
     linha = Linha(folha=folha, numero=numero, corte_nome=corte_nome,
                   corte_matricula=corte_matricula)
-    linha.celulas = _reconhecer(celulas, ocr)
+    linha.celulas = _reconhecer(celulas, ocr, cinza, caixas)
     if celulas_nome is not None and ocr_letras is not None:
-        linha.celulas_nome = _reconhecer(celulas_nome, ocr_letras)
+        linha.celulas_nome = _reconhecer(celulas_nome, ocr_letras, cinza, caixas_nome)
     return linha
 
 
@@ -429,8 +467,15 @@ def avaliar_linha(linha: Linha, modo: str, alpha: float, base: list[dict],
 
     score = topo[0][0]
     margem = score - topo[1][0] if len(topo) > 1 else score
-    aceito = score >= THETA and margem >= DELTA
     campeao = topo[0][1]
+    # D23, a regra dos dois canais (A57): matrícula exata, ou o nome do campeão ≥ τ
+    sim_n = sim_nome if sim_nome is not None else SIM_NOME[METRICA_NOME]
+    dois_canais = (sim_levenshtein(lida, campeao["matricula"]) >= 0.999
+                   or sim_n(nome_lido, campeao["nome"]) >= TAU_NOME)
+    # D22: matrícula com célula em branco nunca é aceita sozinha, vai para a
+    # quarentena — custo medido zero na calibração, no dev e no teste (A59)
+    aceito = (score >= THETA and margem >= DELTA and linha.matricula_completa
+              and dois_canais)
 
     return {
         "folha": linha.folha,
@@ -443,6 +488,8 @@ def avaliar_linha(linha: Linha, modo: str, alpha: float, base: list[dict],
         "verdade_na_base": na_base,
         "confiancas": [round(c.confianca, 4) for c in linha.celulas],
         "motivos": [c.motivo for c in linha.celulas],
+        "matricula_completa": linha.matricula_completa,
+        "dois_canais": dois_canais,
         # o nome também, para a interface de revisão mostrar onde a leitura é
         # frágil — é o canal que deixa o humano notar a troca de pessoa (A15)
         "confiancas_nome": [round(c.confianca, 4) for c in linha.celulas_nome],
@@ -464,7 +511,10 @@ def processar_folha(nome_folha: str, modelo: int | str, base: list[dict], ocr: O
                     ocr_letras: OCR | None = None,
                     corte_nome: float = UNANIME,
                     sim_nome=None,
-                    corte_matricula: float = UNANIME) -> tuple[list[dict], int, int]:
+                    corte_matricula: float = UNANIME,
+                    recorte: str = "v0") -> tuple[list[dict], int, int]:
+    """`recorte`: "v0", o de sempre, ou "v3", que tira a grade pela tinta (D23, A56)."""
+    assert recorte in RECORTES, recorte
     caminho = f"dados/{nome_folha}.png"
     if not os.path.exists(caminho):
         print(f"  {nome_folha}: imagem ausente, pulando")
@@ -479,6 +529,14 @@ def processar_folha(nome_folha: str, modelo: int | str, base: list[dict], ocr: O
     cortador = SheetCutter(PASTA_CELULAS)
     celulas, _ = cortador.cut_info(alinhada, folha_modelo, "matricula")
     celulas_nome, _ = cortador.cut_info(alinhada, folha_modelo, "nome")
+    cinza = caixas = caixas_nome = None
+    if recorte == "v3":
+        # a mesma conversão para cinza que `Image.binarize` faz antes do Otsu
+        dados = alinhada.data
+        cinza = cv2.cvtColor(dados, cv2.COLOR_BGR2GRAY) if dados.ndim == 3 else dados
+        h, w = cinza.shape
+        caixas = SheetCutter.caixas(h, w, folha_modelo, "matricula")
+        caixas_nome = SheetCutter.caixas(h, w, folha_modelo, "nome")
 
     matriculas_base = {a["matricula"] for a in base}
     registros, n_linhas, n_anuladas = [], 0, 0
@@ -487,7 +545,9 @@ def processar_folha(nome_folha: str, modelo: int | str, base: list[dict], ocr: O
         numero = i + 1
         linha = ler_linha(celulas_linha, ocr, nome_folha, numero,
                           celulas_nome[i], ocr_letras, corte_nome,
-                          corte_matricula)
+                          corte_matricula, cinza,
+                          caixas[i] if caixas else None,
+                          caixas_nome[i] if caixas_nome else None)
         if linha.em_branco:
             continue
 
@@ -537,9 +597,12 @@ def conferir_contra_identificar(registros: list[dict], base: list[dict],
     for r in registros:
         if r["decisao"] == "anulada":
             continue        # não passou pelo matcher, não há o que conferir
+        # registro anterior ao D22/D23 não tem os campos: o gate era só score e margem
         ref = identificar(r["leitura"], r["leitura_nome"], base,
                           alpha=r["alpha"], theta=THETA, delta=DELTA,
-                          sim_nome=sim_nome)
+                          sim_nome=sim_nome,
+                          matricula_completa=r.get("matricula_completa", True),
+                          tau_nome=TAU_NOME if "dois_canais" in r else None)
         assert abs(ref["score"] - r["score"]) < 1e-12, (r, ref)
         assert abs(ref["margem"] - r["margem"]) < 1e-12, (r, ref)
         assert ref["decisao"] == r["decisao"], (r, ref)

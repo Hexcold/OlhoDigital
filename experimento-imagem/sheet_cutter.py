@@ -255,6 +255,34 @@ class SheetCutter:
         shutil.rmtree(self.cache_folder, ignore_errors=True)
         os.makedirs(self.cache_folder, exist_ok=True)
 
+    @staticmethod
+    def caixas(h: int, w: int, modelo: ModeloFolha, campo: str
+               ) -> list[list[tuple[int, int, int, int]]]:
+        """As caixas (x1, y1, x2, y2) de cada célula do campo, numa folha alinhada h × w.
+
+        Única fonte da geometria do recorte: `cut_info` recorta por elas, e o recorte V3
+        (`recorte_celula`, D23) abre a janela com folga em volta delas — que tem que ser
+        exatamente a célula que `cut_info` recortaria, senão as duas leituras divergem.
+        """
+        coluna = modelo.coluna(campo)
+        linhas = modelo.linhas
+        colunas = int(coluna["columns"])
+        x_ini: float = coluna["x_begin"] * w
+        x_end: float = coluna["x_end"] * w
+        y_ini: float = modelo.y_begin * h
+        y_end: float = modelo.y_end * h
+        largura_celula: float = (x_end - x_ini) / colunas
+        altura_celula: float = (y_end - y_ini) / linhas
+        saida = []
+        for i in range(linhas):
+            fileira = []
+            for j in range(colunas):
+                x1 = int(x_ini + j * largura_celula)
+                y1 = int(y_ini + i * altura_celula)
+                fileira.append((x1, y1, x1 + int(largura_celula), y1 + int(altura_celula)))
+            saida.append(fileira)
+        return saida
+
     def cut_info(self, img: Image, modelo: ModeloFolha, campo: str
                  ) -> tuple[list[list[Image]], list[list[str]]]:
         """Recorta o campo pedido em `linhas × columns` células.
@@ -266,26 +294,13 @@ class SheetCutter:
         deixasse de ter 18 células — que é exatamente o que a folha gerada faz,
         com 28.
         """
-        coluna = modelo.coluna(campo)
         h, w = img.get_h_w()
+        caixas = self.caixas(h, w, modelo, campo)
 
-        linhas = modelo.linhas
-        colunas = int(coluna["columns"])
-        x_ini: float = coluna["x_begin"] * w
-        x_end: float = coluna["x_end"] * w
-        y_ini: float = modelo.y_begin * h
-        y_end: float = modelo.y_end * h
-        largura_celula: float = (x_end - x_ini) / colunas
-        altura_celula: float = (y_end - y_ini) / linhas
-
-        celulas: list[list[Image]] = [[] for _ in range(linhas)]
-        caminhos: list[list[str]] = [[] for _ in range(linhas)]
-        for i in range(linhas):
-            for j in range(colunas):
-                x1 = int(x_ini + j * largura_celula)
-                y1 = int(y_ini + i * altura_celula)
-                x2 = x1 + int(largura_celula)
-                y2 = y1 + int(altura_celula)
+        celulas: list[list[Image]] = [[] for _ in caixas]
+        caminhos: list[list[str]] = [[] for _ in caixas]
+        for i, fileira in enumerate(caixas):
+            for j, (x1, y1, x2, y2) in enumerate(fileira):
                 celula = Image(img).set_data(img.data[y1:y2, x1:x2])
                 celulas[i].append(celula)
                 caminho = f"{self.cache_folder}/{campo}_{i}_{j}.png"

@@ -60,7 +60,7 @@ from process import folha as modelo_folha
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "experimento-fuzzy"))
 from base_alunos import carregar_base          # noqa: E402
 from normalizacao import normalizar            # noqa: E402
-from fuzzy import ALPHA, THETA, DELTA          # noqa: E402
+from fuzzy import ALPHA, THETA, DELTA, TAU_NOME  # noqa: E402
 
 BASE_XLSX = "../experimento-fuzzy/dados/Lista de Alunos Campus Quixadá.xlsx"
 REGISTROS = "dados/identificacao_folhas.json"
@@ -78,14 +78,24 @@ from identificar_folha import MODELO_DA_FOLHA   # noqa: E402
 
 
 def motivo_rejeicao(score: float, margem: float,
-                    theta: float = THETA, delta: float = DELTA) -> str:
-    """Por que a linha caiu. As duas causas pedem atenção diferente.
+                    theta: float = THETA, delta: float = DELTA,
+                    motivos: list | None = None,
+                    dois_canais: bool | None = None) -> str:
+    """Por que a linha caiu. As causas pedem atenção diferente.
 
     θ e δ caçam espécies diferentes de erro (D03): θ é o impostor confiante,
     δ é o vencedor ambíguo. Para o revisor a diferença é prática — score baixo
     significa "nenhum candidato se parece", e margem baixa significa "dois
     candidatos se parecem igualmente, olhe o nome".
+
+    `motivos` são os das células da matrícula. Célula em branco vem primeiro:
+    ela barra a linha mesmo com score e margem altos (D22, A59). Por último a
+    regra dos dois canais (D23): score e margem passaram, mas a matrícula não é
+    exata e o nome do campeão não chega a τ — o impostor de A57.
     """
+    vazias = sum(1 for m in (motivos or []) if m == "vazia")
+    if vazias:
+        return f"matrícula incompleta: {vazias} de {len(motivos)} células em branco"
     baixo, apertado = score < theta, margem < delta
     if baixo and apertado:
         return "score baixo e margem apertada"
@@ -93,6 +103,8 @@ def motivo_rejeicao(score: float, margem: float,
         return f"score {score:.3f} abaixo de θ={theta}"
     if apertado:
         return f"margem {margem:.3f} abaixo de δ={delta}"
+    if dois_canais is False:
+        return f"matrícula não é exata e o nome não a confirma (dois canais, τ={TAU_NOME})"
     return ""
 
 
@@ -170,7 +182,9 @@ def montar(registros: list[dict], alpha: float, modo: str,
             cache[folha] = recortar_linhas(folha, MODELO_DA_FOLHA[folha])
         r["img"] = cache[folha].get(r["linha"], "")
         r["motivo_rejeicao"] = ("" if r["decisao"] == "aceito"
-                                else motivo_rejeicao(r["score"], r["margem"]))
+                                else motivo_rejeicao(r["score"], r["margem"],
+                                                     motivos=r.get("motivos"),
+                                                     dois_canais=r.get("dois_canais")))
 
         # aceite perigoso: o campeão tem sósia a um dígito na base (A15)
         r["vizinhos"] = []

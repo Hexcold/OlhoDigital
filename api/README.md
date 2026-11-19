@@ -83,6 +83,11 @@ para ler essas mesmas folhas seria medir no treino, sem erro e sem aviso. Na
 coleta ele vale — a folha é inédita por construção. Por isso é variável de
 ambiente: ligar tem que ser ato explícito.
 
+O ponto de operação do servidor (δ = 0,08 e a regra dos dois canais, τ = 0,65) e o
+recorte V3 da célula foram calibrados e medidos **com a afinada ligada** (D23). Sem a
+variável, o servidor decide com esses parâmetros fora da configuração em que foram
+medidos. Cada folha grava o modelo, o τ e o recorte com que foi lida.
+
 ## Duas verrugas conhecidas, e por que elas estão aqui
 
 **1. O processo roda com o `cwd` apontado para `experimento-imagem/`.** O

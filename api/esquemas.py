@@ -96,6 +96,9 @@ class FolhaSaida(BaseModel):
     metrica_nome: str | None
     modelo_matricula: str | None
     modelo_letras: str | None
+    # D23: a regra dos dois canais e o recorte da célula; nulos em folha lida antes deles
+    tau_nome: float | None = None
+    recorte: str | None = None
     criado_em: datetime
     processada_em: datetime | None
     # carimbo de revisão concluída — ver `tabelas.Folha`
@@ -118,15 +121,28 @@ class Candidato(BaseModel):
 
 
 def motivo_rejeicao(score: float, margem: float, theta: float,
-                    delta: float) -> str:
-    """Por que a linha caiu. As duas causas pedem atenção diferente.
+                    delta: float, motivos_matricula: list | None = None,
+                    tau_nome: float | None = None) -> str:
+    """Por que a linha caiu. As causas pedem atenção diferente.
 
     θ e δ caçam espécies diferentes de erro (D03): θ é o impostor confiante, δ
     é o vencedor ambíguo. Para o revisor a diferença é prática — score baixo
     significa "nenhum candidato se parece"; margem baixa significa "dois se
     parecem igualmente, olhe o nome". Portado do `quarentena.py`, que é a
     especificação desta tela.
+
+    A matrícula com célula em branco vem primeiro, porque ela barra a linha
+    mesmo com score e margem altos (D22): é a linha decidida só pelo nome, ou a
+    linha vazia com resíduo de grade (A59).
+
+    `tau_nome` é o da folha: se ela foi lida com a regra dos dois canais (D23) e
+    nada acima explica a quarentena, foi a regra. Folha lida antes dela tem τ nulo
+    e não ganha um motivo que não existia quando foi decidida.
     """
+    vazias = sum(1 for m in (motivos_matricula or []) if m == "vazia")
+    if vazias:
+        return (f"matrícula incompleta: {vazias} de {len(motivos_matricula)} "
+                "células em branco")
     baixo, apertado = score < theta, margem < delta
     if baixo and apertado:
         return "score baixo e margem apertada"
@@ -134,11 +150,13 @@ def motivo_rejeicao(score: float, margem: float, theta: float,
         return f"score {score:.3f} abaixo de θ={theta:g}"
     if apertado:
         return f"margem {margem:.3f} abaixo de δ={delta:g}"
+    if tau_nome is not None:
+        return f"matrícula não é exata e o nome não a confirma (dois canais, τ={tau_nome:g})"
     return ""
 
 
 def montar_linha(linha, vizinhos: list[str], theta: float,
-                 delta: float) -> dict:
+                 delta: float, tau_nome: float | None = None) -> dict:
     """`Linha` do banco -> o que a tela de revisão precisa.
 
     `vizinhos` e `motivo_rejeicao` são DERIVADOS, não colunas: o primeiro
@@ -155,7 +173,9 @@ def montar_linha(linha, vizinhos: list[str], theta: float,
     dados["vizinhos"] = vizinhos
     dados["motivo_rejeicao"] = ("" if linha.decisao == "aceito"
                                 else motivo_rejeicao(linha.score, linha.margem,
-                                                     theta, delta))
+                                                     theta, delta,
+                                                     linha.motivos_matricula,
+                                                     tau_nome))
     revisoes = sorted(linha.revisoes, key=lambda r: r.criado_em)
     dados["revisao"] = revisoes[-1] if revisoes else None
     return dados

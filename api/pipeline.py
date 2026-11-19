@@ -64,7 +64,7 @@ def carregar_recursos() -> dict[str, Any]:
     from identificar_folha import BASE_XLSX, CORTE_CNN            # noqa: E402
     from base_alunos import carregar_base                          # noqa: E402
     from normalizacao import normalizar                            # noqa: E402
-    from fuzzy import SIM_NOME, METRICA_NOME, ALPHA, THETA, DELTA  # noqa: E402
+    from fuzzy import SIM_NOME, METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME  # noqa: E402
     from ocr import OCRCNN                                         # noqa: E402
     from dados_treino import ALFABETO_MAIUSCULAS                   # noqa: E402
 
@@ -89,8 +89,12 @@ def carregar_recursos() -> dict[str, Any]:
         ocr_chave=ocr_chave,
         corte=CORTE_CNN,
         sim_nome=SIM_NOME[METRICA_NOME],
+        # D23: o braço "V3 + regra" do Experimento 03 — recorte V3 e regra dos dois canais,
+        # com o δ e o τ do `fuzzy`. Foi medido com o nome pela afinada: sem
+        # OLHODIGITAL_MODELO_LETRAS apontando para ela, o ponto vale fora de onde foi medido.
         ponto={"alpha": ALPHA, "theta": THETA, "delta": DELTA,
-               "metrica_nome": METRICA_NOME},
+               "metrica_nome": METRICA_NOME, "tau_nome": TAU_NOME,
+               "recorte": "v3"},
         modelo_matricula="cnn base (mnist)",
         modelo_letras=config.modelo_letras or "cnn base (emnist)",
     )
@@ -256,7 +260,7 @@ def processar(caminho_imagem: Path, modelo_folha: str) -> list[dict]:
         registros, n_linhas, n_anuladas = processar_folha(
             nome, modelo_folha, recursos["base"], recursos["ocr_matricula"],
             recursos["ocr_letras"], recursos["corte"], recursos["sim_nome"],
-            recursos["corte"])
+            recursos["corte"], recorte=ponto["recorte"])
 
     linhas = []
     for r in registros:

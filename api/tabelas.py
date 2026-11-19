@@ -146,6 +146,10 @@ class Folha(Base):
     metrica_nome: Mapped[str | None] = mapped_column(String(40), nullable=True)
     modelo_matricula: Mapped[str | None] = mapped_column(Text, nullable=True)
     modelo_letras: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # D23: a regra dos dois canais (τ) e o recorte da célula ("v0" ou "v3") desta leitura.
+    # Nulos numa folha lida antes do D23, que foi decidida sem a regra e com o recorte v0.
+    tau_nome: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recorte: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     processada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
