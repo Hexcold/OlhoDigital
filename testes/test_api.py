@@ -1,6 +1,7 @@
 """A API recebe de tudo: entrada ruim tem que virar 4xx claro, nunca erro 500."""
 import json
 import unittest
+from dataclasses import asdict
 
 from fastapi.testclient import TestClient
 
@@ -23,7 +24,9 @@ class Cabecalho(Comum):
         r = CLIENTE.get("/impressao/cabecalho")
         self.assertEqual(r.status_code, 200)
         corpo = r.json()
-        self.assertEqual(corpo["cabecalho"], BASE)
+        # sem nada salvo, vale o versionado — seja qual for o texto dele: o cabeçalho muda pela
+        # tela a cada evento, e o teste confere o comportamento, não o conteúdo
+        self.assertEqual(corpo["cabecalho"], asdict(lf.carregar_cabecalho(lf.CABECALHO_PADRAO)))
         self.assertIn("carimbo de versão", corpo["travado"])
         self.assertIn("grade de células", corpo["travado"])
 

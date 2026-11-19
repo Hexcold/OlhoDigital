@@ -171,7 +171,10 @@ class Persistencia(unittest.TestCase):
         self.assertEqual(lf.carregar_cabecalho(self.arquivo), c)
 
     def test_sem_arquivo_le_o_versionado(self):
-        self.assertTrue(lf.carregar_cabecalho(self.arquivo).titulo.startswith("ENCONTROS"))
+        # compara com o arquivo versionado, e não com um texto: o cabeçalho muda pela tela a
+        # cada evento, e o que se testa é que, sem nada salvo, é ele que vale
+        versionado = json.loads(lf.CABECALHO_PADRAO.read_text(encoding="utf-8"))
+        self.assertEqual(lf.carregar_cabecalho(self.arquivo), gf.Cabecalho(**versionado))
 
     def test_recusado_nao_toca_no_arquivo(self):
         lf.salvar_cabecalho(EU, self.arquivo)
