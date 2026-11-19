@@ -128,22 +128,18 @@ def _ler_e_gravar(folha_id: int) -> None:
         # pode legitimamente ser toda ambígua), por isso o estado é `suspeita` e
         # não `erro`: os dados ficam, a revisão continua possível, e ninguém
         # confunde isto com leitura boa.
+        #
+        # Havia um segundo sinal, a grade INTEIRA vir preenchida, que pegava o
+        # quase-acerto: a m7_02 lida como `gerada_v1` deu 39 linhas e ainda teve
+        # aceites (A43). Saiu em 18/11/2026, por decisão do autor (D21). Nos
+        # Encontros, folha cheia é o caso normal de evento lotado, e o sinal a
+        # marcava como suspeita, o que a deixava sem evento e sem ponto de
+        # operação gravado. O quase-acerto volta a passar sem alarme. O risco
+        # dele é ler folha de versão antiga, e a coleta é toda v4.
         aceitos = sum(1 for l in linhas if l["decisao"] == "aceito")
-        total_grade = pipeline.linhas_da_grade(folha.modelo_folha)
-        # DOIS sinais, porque um só não bastava. "Zero aceites" pega o
-        # desencontro grosseiro (folha antiga lida como v4: 33 linhas, 0
-        # aceites). Não pega o quase-acerto — a m7_02 lida como `gerada_v1` deu
-        # 39 linhas e ainda assim teve aceites, porque as duas geometrias são
-        # parecidas. O segundo sinal é a grade INTEIRA vir preenchida: folha
-        # real tem linha em branco no fim (a m7_02 usa 16 de 33), e ler todas
-        # as linhas da grade como preenchidas é o que acontece quando o
-        # recorte pega traço onde não há campo.
         motivo = ""
         if len(linhas) >= 5 and aceitos == 0:
             motivo = f"{len(linhas)} linhas e nenhum aceite"
-        elif total_grade and len(linhas) == total_grade:
-            motivo = (f"todas as {total_grade} linhas da grade vieram "
-                      "preenchidas, sem nenhuma em branco no fim")
         if motivo:
             folha.estado = "suspeita"
             folha.erro = (

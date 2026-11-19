@@ -123,14 +123,6 @@ def marcar_duplicadas(linhas: list[dict]) -> int:
     return marcadas
 
 
-def linhas_da_grade(modelo_folha: str) -> int:
-    """Quantas linhas a grade deste modelo tem. 0 se o modelo for desconhecido."""
-    preparar()
-    from sheet_cutter import MODELOS                              # noqa: E402
-    modelo = MODELOS.get(modelo_folha)
-    return modelo.linhas if modelo else 0
-
-
 class SemMarcadores(RuntimeError):
     """O arquivo não tem os 4 ArUco — provavelmente não é folha de presença."""
 
