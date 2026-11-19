@@ -315,6 +315,8 @@ function render() {
     if (d) {
       feitas++;
       aviso.textContent = '✓ ' + (d.escolha === '?' ? 'nao identificado'
+        : d.escolha === 'FORA' ? 'fora da base'
+        : d.escolha === 'VAZIA' ? 'linha vazia'
         : d.escolha + ' — ' + d.rotulo) + (d.ms ? '  (' + (d.ms / 1000).toFixed(1) + ' s)' : '');
       aviso.innerHTML += ' <button class="btn" onclick="limpar(\\'' + id + '\\')">desfazer</button>';
     } else { aviso.textContent = ''; }
@@ -371,8 +373,30 @@ def esc(s: str) -> str:
     return _h.escape(str(s or ""))
 
 
-def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str:
-    chave = f"a{alpha}_{modo}"
+def render(linhas: list[dict], base: list[dict], alpha: float, modo: str,
+           cego: bool = False, cego_total: bool = False) -> str:
+    """`cego`: o gabarito da calibração da coleta (Experimento 03).
+
+    Nas linhas em quarentena, esconde o que o sistema leu, os candidatos, score,
+    margem e motivo. Fica o recorte e a busca na base. Julgar "o primeiro
+    candidato está certo" com o primeiro candidato na tela é a ancoragem que faz
+    afrouxar o gate parecer mais seguro do que é. As aceitas continuam com a
+    pessoa à mostra, para auditoria.
+
+    Também ganha o botão "fora da base", separado de "não identificado". Sem ele,
+    a pessoa legível mas de fora da base ficaria sem verdade e sairia da conta, e
+    o aceite errado dela não contaria como erro. E "linha vazia": o pipeline lê
+    linha vazia como preenchida quando sobra grade na célula (A54).
+
+    `cego_total`: o gabarito do teste. Esconde também o rótulo aceito/quarentena e a
+    separação em seções, que denunciam a decisão do sistema, e lista as linhas na
+    ordem da folha. Linha anulada fica de fora, porque não vai ao matcher.
+    """
+    cego = cego or cego_total
+    chave = f"a{alpha}_{modo}" + ("_cegototal" if cego_total else "_cego" if cego else "")
+    if cego_total:
+        linhas = sorted((r for r in linhas if r["decisao"] != "anulada"),
+                        key=lambda r: (r["folha"], r["linha"]))
     # O nome do arquivo exportado leva as FOLHAS, não só a configuração. Revisar
     # duas folhas na mesma configuração produzia dois `revisao_a0.5_chuta.json`
     # na pasta de downloads, e o segundo substituía o primeiro sem aviso — nome
@@ -392,10 +416,11 @@ def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str
                          ensure_ascii=False, separators=(",", ":"))
     ids = [f'{r["folha"]}-{r["linha"]:02d}' for r in linhas]
 
-    p = [f'<meta charset="utf-8"><title>Revisão de quarentena</title>',
+    titulo = "Gabarito cego" if cego else "Revisão de quarentena"
+    p = [f'<meta charset="utf-8"><title>{titulo}</title>',
          f'<style>{ESTILO}</style>',
          '<div class="topo">',
-         f'<h1>Revisão de quarentena <span class="id">· α={alpha} · {esc(modo)} '
+         f'<h1>{titulo} <span class="id">· α={alpha} · {esc(modo)} '
          f'· θ={THETA} δ={DELTA}</span></h1>',
          '<span class="contador" id="contador"></span>',
          '<button class="btn primario" onclick="exportar()">exportar decisões</button>',
@@ -403,24 +428,33 @@ def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str
          '<div class="aviso"><strong>Contém dado pessoal real.</strong> Gerado em '
          '<code>dados/</code>, que o git ignora. Não subir para lugar nenhum.<br>'
          'As decisões ficam no navegador (localStorage) até você exportar.</div>']
+    if cego:
+        p.append('<div class="aviso">Na quarentena, o que o sistema leu e os candidatos '
+                 'estão escondidos de propósito: leia o recorte e busque a pessoa na '
+                 'base. <strong>fora da base</strong>: a linha é legível, mas a pessoa '
+                 'não está na base. <strong>não identificado</strong>: não dá para '
+                 'saber quem é.</div>')
 
     def bloco(r: dict, aceito: bool) -> None:
         rid = f'{r["folha"]}-{r["linha"]:02d}'
-        classe = "linha aceito" if aceito else "linha"
-        if r.get("vizinhos"):
+        oculto = cego and (cego_total or not aceito)
+        classe = "linha aceito" if aceito and not cego_total else "linha"
+        if r.get("vizinhos") and not cego_total:
             classe += " perigo"
         p.append(f'<div class="{classe}" id="linha-{rid}" '
                  f'onmouseenter="marcarFoco(\'{rid}\')">')
         p.append('<div class="cab">')
         p.append(f'<span class="id">{esc(r["folha"])} · linha {r["linha"]:02d}</span>')
-        p.append(f'<span class="tag {"a" if aceito else "q"}">'
-                 f'{"aceito" if aceito else "quarentena"}</span>')
-        if r.get("motivo_rejeicao"):
+        if not cego_total:
+            p.append(f'<span class="tag {"a" if aceito else "q"}">'
+                     f'{"aceito" if aceito else "quarentena"}</span>')
+        if r.get("motivo_rejeicao") and not oculto:
             p.append(f'<span class="porque">{esc(r["motivo_rejeicao"])}</span>')
-        p.append(f'<span class="id">score {r["score"]:.3f} · margem {r["margem"]:.3f}</span>')
+        if not oculto:
+            p.append(f'<span class="id">score {r["score"]:.3f} · margem {r["margem"]:.3f}</span>')
         p.append('</div>')
 
-        if r.get("vizinhos"):
+        if r.get("vizinhos") and not cego_total:
             v = ", ".join(esc(x) for x in r["vizinhos"][:5])
             p.append(f'<div class="alerta">⚠ o campeão tem '
                      f'{len(r["vizinhos"])} matrícula(s) real(is) a UM dígito: '
@@ -430,29 +464,35 @@ def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str
             p.append(f'<div class="tira"><img src="data:image/jpeg;base64,{r["img"]}" '
                      f'alt="linha {r["linha"]} da folha {esc(r["folha"])}"></div>')
 
-        p.append('<div class="leituras">')
-        p.append('<div><span class="rot">matrícula lida</span><span class="mono">'
-                 + leitura_colorida(r["leitura"], r.get("confiancas", []),
-                                    r.get("motivos", [])) + '</span></div>')
-        p.append('<div><span class="rot">nome lido</span><span class="mono">'
-                 + leitura_colorida(r.get("leitura_nome", ""),
-                                    r.get("confiancas_nome", []),
-                                    r.get("motivos_nome", [])) + '</span></div>')
-        p.append('</div>')
+        if not oculto:
+            p.append('<div class="leituras">')
+            p.append('<div><span class="rot">matrícula lida</span><span class="mono">'
+                     + leitura_colorida(r["leitura"], r.get("confiancas", []),
+                                        r.get("motivos", [])) + '</span></div>')
+            p.append('<div><span class="rot">nome lido</span><span class="mono">'
+                     + leitura_colorida(r.get("leitura_nome", ""),
+                                        r.get("confiancas_nome", []),
+                                        r.get("motivos_nome", [])) + '</span></div>')
+            p.append('</div>')
 
-        p.append('<ul class="cands">')
-        for c in r.get("top3", []):
-            rot = esc(c["nome"])
-            p.append(f'<li><button class="cand" data-mat="{esc(c["matricula"])}" '
-                     f'onclick="decidir(\'{rid}\',\'{esc(c["matricula"])}\',\'{rot}\')">'
-                     f'<span class="score">{c["score"]:.3f}</span>'
-                     f'<strong>{esc(c["matricula"])}</strong><span>{rot}</span>'
-                     f'<span class="score">{esc(c.get("curso"))}</span></button></li>')
-        p.append('</ul>')
+            p.append('<ul class="cands">')
+            for c in r.get("top3", []):
+                rot = esc(c["nome"])
+                p.append(f'<li><button class="cand" data-mat="{esc(c["matricula"])}" '
+                         f'onclick="decidir(\'{rid}\',\'{esc(c["matricula"])}\',\'{rot}\')">'
+                         f'<span class="score">{c["score"]:.3f}</span>'
+                         f'<strong>{esc(c["matricula"])}</strong><span>{rot}</span>'
+                         f'<span class="score">{esc(c.get("curso"))}</span></button></li>')
+            p.append('</ul>')
 
         p.append('<div class="acoes">')
         p.append(f'<input class="busca" placeholder="buscar na base por nome ou matrícula…" '
                  f'oninput="buscar(\'{rid}\', this.value)">')
+        if cego:
+            p.append(f'<button class="btn" onclick="decidir(\'{rid}\',\'FORA\',\'\')">'
+                     f'fora da base</button>')
+            p.append(f'<button class="btn" onclick="decidir(\'{rid}\',\'VAZIA\',\'\')">'
+                     f'linha vazia</button>')
         p.append(f'<button class="btn" onclick="decidir(\'{rid}\',\'?\',\'\')">'
                  f'não identificado</button>')
         p.append('</div>')
@@ -460,8 +500,16 @@ def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str
         p.append(f'<div class="decidido" id="decidido-{rid}"></div>')
         p.append('</div>')
 
-    p.append(f'<div class="secao">quarentena — {len(quarentena)} linhas para revisar</div>')
-    if quarentena:
+    if cego_total:
+        p.append(f'<div class="secao">{len(linhas)} linhas, na ordem da folha</div>')
+        for r in linhas:
+            bloco(r, aceito=False)
+        quarentena = anuladas = aceitos = []
+    else:
+        p.append(f'<div class="secao">quarentena — {len(quarentena)} linhas para revisar</div>')
+    if cego_total:
+        pass
+    elif quarentena:
         for r in quarentena:
             bloco(r, aceito=False)
     else:
@@ -486,7 +534,8 @@ def render(linhas: list[dict], base: list[dict], alpha: float, modo: str) -> str
         for r in perigosos:
             bloco(r, aceito=True)
 
-    p.append(f'<div class="secao">demais aceites — {len(tranquilos)}</div>')
+    if not cego_total:
+        p.append(f'<div class="secao">demais aceites — {len(tranquilos)}</div>')
     for r in tranquilos:
         bloco(r, aceito=True)
 
@@ -506,6 +555,8 @@ if __name__ == "__main__":
     ap.add_argument("--modo", default="chuta", choices=("chuta", "abstem"))
     ap.add_argument("--registros", default=REGISTROS)
     ap.add_argument("--saida", default=SAIDA)
+    ap.add_argument("--cego", action="store_true",
+                    help="gabarito cego: esconde leitura e candidatos na quarentena")
     args = ap.parse_args()
 
     if not os.path.exists(args.registros):
@@ -528,7 +579,7 @@ if __name__ == "__main__":
 
     os.makedirs("dados", exist_ok=True)
     with open(args.saida, "w") as f:
-        f.write(render(linhas, base, args.alpha, args.modo))
+        f.write(render(linhas, base, args.alpha, args.modo, cego=args.cego))
 
     tam = os.path.getsize(args.saida) / 1024
     perig = sum(1 for r in linhas if r.get("vizinhos"))
