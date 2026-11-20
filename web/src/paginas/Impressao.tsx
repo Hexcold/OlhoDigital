@@ -1,7 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { api, ErroApi } from "../api";
-import type { CabecalhoFolha, Lote, Sessao } from "../tipos";
+import type {
+  CabecalhoFolha,
+  CabecalhoResposta,
+  Lote,
+  ModeloPedido,
+  PacoteAberto,
+  Sessao,
+} from "../tipos";
 
 /** Preparação da impressão: os textos da folha e o lote por planilha.
  *
@@ -59,7 +66,26 @@ function baixar(blob: Blob, nome: string) {
   URL.revokeObjectURL(url);
 }
 
-function Editor({ aoMudar }: { aoMudar: (pronto: boolean) => void }) {
+/** De onde o editor lê e para onde grava: o texto global (padrão) ou o modelo de um grupo
+ *  (D35, fase 3). */
+export interface FonteCabecalho {
+  carregar: () => Promise<CabecalhoResposta>;
+  salvar: (c: CabecalhoFolha) => Promise<CabecalhoResposta>;
+}
+
+export function Editor({
+  aoMudar,
+  fonte,
+  aoSalvar,
+}: {
+  aoMudar: (pronto: boolean) => void;
+  fonte?: FonteCabecalho;
+  aoSalvar?: (c: CabecalhoFolha) => void;
+}) {
+  // a fonte é lida uma vez, na montagem: quem quiser outra fonte remonta o editor (`key`)
+  const origem = useRef<FonteCabecalho>(
+    fonte ?? { carregar: api.cabecalho, salvar: api.salvarCabecalho },
+  );
   const [salvo, setSalvo] = useState<CabecalhoFolha | null>(null);
   const [campos, setCampos] = useState<CabecalhoFolha>(VAZIO);
   const [chave, setChave] = useState("");
@@ -72,8 +98,8 @@ function Editor({ aoMudar }: { aoMudar: (pronto: boolean) => void }) {
   const [ocupado, setOcupado] = useState("");
 
   useEffect(() => {
-    api
-      .cabecalho()
+    origem.current
+      .carregar()
       .then((r) => {
         setSalvo(r.cabecalho);
         setCampos(r.cabecalho);
@@ -114,9 +140,10 @@ function Editor({ aoMudar }: { aoMudar: (pronto: boolean) => void }) {
   }, [salvo, mudou, aoMudar]);
 
   async function gravar() {
-    const r = await api.salvarCabecalho(campos);
+    const r = await origem.current.salvar(campos);
     setSalvo(r.cabecalho);
     setCampos(r.cabecalho);
+    aoSalvar?.(r.cabecalho);
   }
 
   async function executar(nome: string, acao: () => Promise<void>) {
@@ -139,7 +166,8 @@ function Editor({ aoMudar }: { aoMudar: (pronto: boolean) => void }) {
   const gerar = () =>
     executar("gerando", async () => {
       if (mudou) await gravar();
-      const blob = await api.gerarFolhas(chave, folhas);
+      // o texto que a prévia mostra (salvo acima) vai no pedido: no grupo, é o modelo dele
+      const blob = await api.gerarFolhas(chave, folhas, campos);
       baixar(blob, `folhas_${chave || "sem_chave"}_${folhas}paginas.pdf`);
       setAviso(
         `PDF gerado: ${folhas} folha(s), ${chave ? `chave ${chave}` : "sem chave"}.`,
@@ -240,11 +268,23 @@ function Editor({ aoMudar }: { aoMudar: (pronto: boolean) => void }) {
   );
 }
 
-function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
+export function Planilha({
+  cabecalhoPronto,
+  grupoFixo,
+  modelo,
+}: {
+  cabecalhoPronto: boolean;
+  /** D35: dentro da página do grupo, o cadastro vai para ele e o campo some */
+  grupoFixo?: string;
+  /** D35, fase 3: o modelo do grupo e os ajustes por evento vão no pedido do PDF */
+  modelo?: ModeloPedido;
+}) {
   const eu = useOutletContext<Sessao>();
   const [lote, setLote] = useState<Lote | null>(null);
   const [erro, setErro] = useState("");
   const [aviso, setAviso] = useState("");
+  // D24: o grupo dos eventos que o cadastro criar, como "EU" para os Encontros
+  const [grupoCadastro, setGrupoCadastro] = useState(grupoFixo ?? "");
   const [aceito, setAceito] = useState(false);
   const [ocupado, setOcupado] = useState("");
   // o arquivo fica guardado para reler com outro corte sem escolher de novo
@@ -278,7 +318,7 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
 
   const gerar = (l: Lote) =>
     executar("gerando", async () => {
-      const blob = await api.gerarPdf(l.itens, aceito);
+      const blob = await api.gerarPdf(l.itens, aceito, modelo);
       baixar(
         blob,
         `folhas_${l.total_chaves}chaves_${l.total_folhas}paginas.pdf`,
@@ -288,9 +328,11 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
 
   const cadastrar = (l: Lote) =>
     executar("cadastrando", async () => {
-      const r = await api.cadastrarChaves(l.itens);
+      const grupo = grupoCadastro.trim();
+      const r = await api.cadastrarChaves(l.itens, grupo);
       setAviso(
-        `${r.criados} evento(s) cadastrado(s), ${r.ja_existiam} já existia(m).`,
+        `${r.criados} evento(s) cadastrado(s)${grupo && r.criados ? ` no grupo ${grupo}` : ""}, ` +
+          `${r.ja_existiam} já existia(m)${grupo && r.ja_existiam ? " e ficaram no grupo que tinham" : ""}.`,
       );
     });
 
@@ -445,16 +487,27 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
                 : `Gerar PDF (${lote.total_folhas} páginas)`}
             </button>
             {eu.papel === "admin" && (
-              <button
-                type="button"
-                className={BOTAO_SECUNDARIO}
-                disabled={lote.erros.length > 0 || !!ocupado}
-                onClick={() => cadastrar(lote)}
-              >
-                {ocupado === "cadastrando"
-                  ? "cadastrando…"
-                  : "Cadastrar como eventos"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={BOTAO_SECUNDARIO}
+                  disabled={lote.erros.length > 0 || !!ocupado || !grupoCadastro.trim()}
+                  onClick={() => cadastrar(lote)}
+                >
+                  {ocupado === "cadastrando"
+                    ? "cadastrando…"
+                    : "Cadastrar como eventos"}
+                </button>
+                {!grupoFixo && (
+                  <input
+                    value={grupoCadastro}
+                    onChange={(e) => setGrupoCadastro(e.target.value)}
+                    placeholder="no grupo (obrigatório), ex.: EU"
+                    aria-label="grupo dos eventos cadastrados"
+                    className="w-56 rounded border border-slate-300 px-2 py-1.5 text-base sm:text-sm"
+                  />
+                )}
+              </>
             )}
           </div>
 
@@ -475,12 +528,120 @@ function Planilha({ cabecalhoPronto }: { cabecalhoPronto: boolean }) {
   );
 }
 
+/** D35, fase 3: imprimir com o modelo de um grupo a partir do pacote que o sistema completo
+ *  exporta. É o caminho do PC de impressão (D19), que não tem banco. */
+function AbrirPacote() {
+  const [pacote, setPacote] = useState<PacoteAberto | null>(null);
+  const [previa, setPrevia] = useState("");
+  const [aceito, setAceito] = useState(false);
+  const [erro, setErro] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [ocupado, setOcupado] = useState("");
+
+  useEffect(() => {
+    if (!pacote) return;
+    let url = "";
+    api
+      .previaCabecalho(pacote.cabecalho, pacote.lote.itens[0]?.chave ?? "")
+      .then((b) => setPrevia((url = URL.createObjectURL(b))))
+      .catch(() => {});
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [pacote]);
+
+  async function executar(nome: string, acao: () => Promise<void>) {
+    setOcupado(nome);
+    setErro("");
+    setAviso("");
+    try {
+      await acao();
+    } catch (e) {
+      setErro(mensagem(e));
+    } finally {
+      setOcupado("");
+    }
+  }
+
+  const ajustados = pacote ? Object.keys(pacote.ajustes).length : 0;
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4">
+      <h2 className="text-base font-semibold">Pacote de um grupo</h2>
+      <p className="mt-1 text-sm text-slate-600">
+        No sistema completo, cada grupo tem o seu modelo de folha. Baixe lá o{" "}
+        <strong>pacote de impressão</strong> do grupo (aba Folha) e abra aqui: as folhas saem com
+        o modelo e os ajustes de cada evento.
+      </p>
+      <input
+        type="file"
+        accept="application/json,.json"
+        className="mt-3 block text-sm"
+        onChange={(e) => {
+          const a = e.target.files?.[0];
+          e.target.value = "";
+          if (a)
+            executar("lendo", async () => {
+              setPacote(null);
+              setAceito(false);
+              setPacote(await api.abrirPacote(a));
+            });
+        }}
+      />
+      {pacote && (
+        <div className="mt-3 space-y-2 text-sm">
+          <p>
+            Grupo <strong>{pacote.grupo}</strong>: {pacote.lote.total_chaves} chave(s),{" "}
+            {pacote.lote.total_folhas} folha(s)
+            {ajustados > 0 && `, ${ajustados} evento(s) com texto próprio`}.
+          </p>
+          {previa && (
+            <img src={previa} alt="Topo da folha do grupo" className="w-full rounded border" />
+          )}
+          {pacote.lote.erros.map((x) => (
+            <p key={x} className="text-red-700">{x}</p>
+          ))}
+          {pacote.lote.alertas.length > 0 && (
+            <label className="flex items-start gap-2 text-amber-900">
+              <input type="checkbox" checked={aceito} onChange={(e) => setAceito(e.target.checked)} />
+              <span>
+                {pacote.lote.alertas.join(" ")} <strong>Entendi, gerar mesmo assim.</strong>
+              </span>
+            </label>
+          )}
+          <button
+            type="button"
+            className={BOTAO}
+            disabled={
+              !!ocupado ||
+              pacote.lote.erros.length > 0 ||
+              (pacote.lote.alertas.length > 0 && !aceito)
+            }
+            onClick={() =>
+              executar("gerando", async () => {
+                const blob = await api.gerarPdf(pacote.lote.itens, aceito, pacote);
+                baixar(blob, `folhas_${pacote.grupo}_${pacote.lote.total_folhas}paginas.pdf`);
+                setAviso(`PDF gerado: ${pacote.lote.total_folhas} páginas.`);
+              })
+            }
+          >
+            {ocupado === "gerando" ? "gerando…" : `Gerar PDF do grupo ${pacote.grupo}`}
+          </button>
+        </div>
+      )}
+      {ocupado === "lendo" && <p className="mt-2 text-sm text-slate-500">lendo o pacote…</p>}
+      {erro && <p className="mt-2 text-sm text-red-700">{erro}</p>}
+      {aviso && <p className="mt-2 text-sm text-green-800">{aviso}</p>}
+    </section>
+  );
+}
+
 export default function Impressao() {
   const [cabecalhoPronto, setCabecalhoPronto] = useState(false);
 
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold tracking-tight">Impressão</h1>
+      <AbrirPacote />
       <Editor aoMudar={setCabecalhoPronto} />
       <Planilha cabecalhoPronto={cabecalhoPronto} />
     </div>

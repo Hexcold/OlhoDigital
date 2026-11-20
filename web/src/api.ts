@@ -1,14 +1,23 @@
 import type {
+  CabecalhoAjuste,
   CabecalhoFolha,
   CabecalhoResposta,
   Cadastro,
+  ChaveSugerida,
   Categoria,
   Evento,
+  Fila,
   Folha,
+  Grupo,
   ItemLote,
   Linha,
+  LinhaDoGrupo,
   Lote,
+  ModeloGrupo,
+  ModeloPedido,
+  PacoteAberto,
   Participante,
+  PreviaApagar,
   ResumoRevisao,
   Sessao,
   SugestaoEventos,
@@ -31,6 +40,8 @@ export interface EventoEntrada {
   categoria?: Categoria | null;
   horas_complementares?: number | null;
   orgao_promotor?: string | null;
+  /** Sem o campo, a edição não mexe no grupo (D24). */
+  grupo?: string | null;
 }
 
 /** Erro que carrega o que a API respondeu.
@@ -94,7 +105,8 @@ export const api = {
 
   sair: () => fetch("/api/sair", { method: "POST" }),
 
-  listarEventos: () => pedir<Evento[]>("/eventos"),
+  listarEventos: (grupo?: string) =>
+    pedir<Evento[]>(grupo ? `/eventos?grupo=${encodeURIComponent(grupo)}` : "/eventos"),
 
   criarEvento: (dados: EventoEntrada) =>
     pedir<Evento>("/eventos", {
@@ -124,9 +136,52 @@ export const api = {
     }
   },
 
-  listarFolhas: () => pedir<Folha[]>("/folhas"),
+  listarFolhas: (grupo?: string) =>
+    pedir<Folha[]>(grupo ? `/folhas?grupo=${encodeURIComponent(grupo)}` : "/folhas"),
   obterFolha: (id: number) => pedir<Folha>(`/folhas/${id}`),
   linhasDaFolha: (id: number) => pedir<Linha[]>(`/folhas/${id}/linhas`),
+
+  /** O progresso da leitura: uma pergunta só, em vez de uma por folha na fila. */
+  fila: () => pedir<Fila>("/folhas/fila"),
+
+  /** O mesmo envio, informando o progresso do upload. `fetch` não dá esse número, por isso
+   *  XMLHttpRequest. `aoProgresso` recebe de 0 a 1; em 1 o arquivo chegou e o servidor está
+   *  convertendo o PDF em páginas, o que a requisição não tem como medir por dentro. */
+  enviarFolhaComProgresso: (
+    arquivo: File,
+    aoProgresso: (fracao: number) => void,
+    grupo?: string,
+  ) =>
+    new Promise<Folha[]>((resolve, reject) => {
+      const corpo = new FormData();
+      corpo.append("arquivo", arquivo);
+      // D35, fase 5: pela aba do grupo, a chave casa só com os eventos dele
+      if (grupo) corpo.append("grupo", grupo);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/folhas");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) aoProgresso(e.loaded / e.total);
+      };
+      xhr.upload.onload = () => aoProgresso(1);
+      xhr.onerror = () => reject(new ErroApi(0, "sem conexão com o servidor"));
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText) as Folha[]);
+          return;
+        }
+        if (xhr.status === 401 && window.location.pathname !== "/login") {
+          window.location.assign("/login");
+        }
+        let detalhe = xhr.statusText;
+        try {
+          detalhe = JSON.parse(xhr.responseText).detail ?? detalhe;
+        } catch {
+          // corpo sem JSON: fica o status
+        }
+        reject(new ErroApi(xhr.status, String(detalhe)));
+      };
+      xhr.send(corpo);
+    }),
 
   /** Devolve uma LISTA: um PDF de escâner traz uma folha por página, que é o
    *  formato real das 500. O contrato não muda conforme o que foi enviado. */
@@ -137,13 +192,42 @@ export const api = {
     return pedir<Folha[]>("/folhas", { method: "POST", body: corpo });
   },
 
-  revisar: (linhaId: number, escolha: string | null, ms?: number) =>
+  /** Troca a imagem da folha por outro escaneamento do MESMO papel e relê (A61). Uma
+   *  imagem ou um PDF de uma página. `forcar` quando já houver decisão humana, que a
+   *  releitura descarta. */
+  substituirEscaneamento: (folhaId: number, arquivo: File, forcar = false) => {
+    const corpo = new FormData();
+    corpo.append("arquivo", arquivo);
+    if (forcar) corpo.append("forcar", "true");
+    return pedir<Folha>(`/folhas/${folhaId}/substituir`, { method: "POST", body: corpo });
+  },
+
+  /** D30: esta cópia passa a valer, e a que valia vira cópia dela. */
+  usarCopia: (folhaId: number) =>
+    pedir<Folha>(`/folhas/${folhaId}/usar-copia`, { method: "POST" }),
+
+  /** D30: a detecção errou; as duas folhas contam, e esta não é remarcada. */
+  naoECopia: (folhaId: number) =>
+    pedir<Folha>(`/folhas/${folhaId}/nao-e-copia`, { method: "POST" }),
+
+  revisar: (
+    linhaId: number,
+    escolha: string | null,
+    ms?: number,
+    fora?: { matricula: string; nome: string },
+  ) =>
     pedir(`/linhas/${linhaId}/revisao`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       // `null` é decisão legítima — "não identificado" —, não ausência de
-      // decisão. Por isso vai explícito no corpo.
-      body: JSON.stringify({ matricula_escolhida: escolha, ms }),
+      // decisão. Por isso vai explícito no corpo. `fora` é o D32: a pessoa
+      // estava lá e não está na base.
+      body: JSON.stringify({
+        matricula_escolhida: escolha,
+        ms,
+        matricula_informada: fora?.matricula ?? null,
+        nome_informado: fora?.nome ?? null,
+      }),
     }),
 
   buscarParticipantes: (q: string) =>
@@ -215,11 +299,11 @@ export const api = {
     }),
 
   /** Uma ou várias folhas sem planilha. Chave vazia sai para rotular à mão. */
-  gerarFolhas: (chave: string, folhas: number) =>
+  gerarFolhas: (chave: string, folhas: number, cabecalho?: CabecalhoFolha) =>
     pedirArquivo("/impressao/folhas", {
       method: "POST",
       headers: JSON_CORPO,
-      body: JSON.stringify({ chave, folhas }),
+      body: JSON.stringify({ chave, folhas, cabecalho: cabecalho ?? null }),
     }),
 
   /** `ateLinha`: a última linha da planilha que entra no lote, como no Excel. */
@@ -231,18 +315,51 @@ export const api = {
   },
 
   /** Recusa com 409 enquanto houver alerta sem `aceitarAlertas`. */
-  gerarPdf: (itens: ItemLote[], aceitarAlertas: boolean) =>
+  /** `modelo` (D35, fase 3): imprime com o modelo de um grupo e os ajustes por chave. */
+  gerarPdf: (itens: ItemLote[], aceitarAlertas: boolean, modelo?: ModeloPedido) =>
     pedirArquivo("/impressao/pdf", {
       method: "POST",
       headers: JSON_CORPO,
-      body: JSON.stringify({ itens, aceitar_alertas: aceitarAlertas }),
+      body: JSON.stringify({
+        itens,
+        aceitar_alertas: aceitarAlertas,
+        cabecalho: modelo?.cabecalho ?? null,
+        ajustes: modelo?.ajustes ?? null,
+      }),
     }),
 
-  cadastrarChaves: (itens: ItemLote[]) =>
+  // --- D35, fase 3: o modelo da folha por grupo -------------------------------------
+  modeloDoGrupo: (nome: string) => pedir<ModeloGrupo>(`/grupos/${encodeURIComponent(nome)}/modelo`),
+  salvarModeloDoGrupo: (nome: string, cabecalho: CabecalhoFolha | null) =>
+    pedir<ModeloGrupo>(`/grupos/${encodeURIComponent(nome)}/modelo`, {
+      method: "PUT",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ cabecalho }),
+    }),
+  ajustarEvento: (eventoId: number, ajuste: CabecalhoAjuste) =>
+    pedir<Evento>(`/eventos/${eventoId}/ajuste`, {
+      method: "PUT",
+      headers: JSON_CORPO,
+      body: JSON.stringify(ajuste),
+    }),
+  chavesSugeridas: (nome: string, n = 8) =>
+    pedir<ChaveSugerida[]>(`/grupos/${encodeURIComponent(nome)}/chaves-sugeridas?n=${n}`),
+  /** Todas as folhas do grupo num PDF só, para imprimir. Pode levar alguns minutos. */
+  pdfDoGrupo: (nome: string) => pedirArquivo(`/grupos/${encodeURIComponent(nome)}/pdf`),
+  urlPacote: (nome: string) => `/api/grupos/${encodeURIComponent(nome)}/pacote`,
+  /** Abre o pacote de um grupo no PC de impressão: não grava nada, devolve o lote. */
+  abrirPacote: (arquivo: File) => {
+    const corpo = new FormData();
+    corpo.append("arquivo", arquivo);
+    return pedir<PacoteAberto>("/impressao/pacote", { method: "POST", body: corpo });
+  },
+
+  /** `grupo`: o grupo dos eventos CRIADOS agora; os que já existiam não mudam. */
+  cadastrarChaves: (itens: ItemLote[], grupo?: string) =>
     pedir<Cadastro>("/impressao/cadastrar", {
       method: "POST",
       headers: JSON_CORPO,
-      body: JSON.stringify({ itens }),
+      body: JSON.stringify({ itens, grupo: grupo || null }),
     }),
 
   urlModeloPlanilha: () => "/api/impressao/planilha/modelo",
@@ -263,6 +380,83 @@ export const api = {
   /** O navegador baixa direto do servidor: o JSON de uma folha grande não
    *  precisa passar pela memória do cliente só para virar um arquivo. */
   urlJson: (folhaId: number) => `/api/folhas/${folhaId}/json`,
+
+  // --- grupos de eventos e apagar em massa (D24) ---------------------------
+
+  listarGrupos: () => pedir<Grupo[]>("/grupos"),
+
+  // --- D35: o grupo como entidade ---------------------------------------------------
+  obterGrupo: (nome: string) => pedir<Grupo>(`/grupos/${encodeURIComponent(nome)}`),
+  criarGrupo: (nome: string, descricao?: string) =>
+    pedir<Grupo>("/grupos", {
+      method: "POST",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ nome, descricao: descricao || null }),
+    }),
+  renomearGrupo: (nome: string, novo: string, descricao?: string | null) =>
+    pedir<Grupo>(`/grupos/${encodeURIComponent(nome)}`, {
+      method: "PATCH",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ nome: novo, descricao: descricao || null }),
+    }),
+  apagarGrupo: (nome: string) =>
+    fetch(`/api/grupos/${encodeURIComponent(nome)}`, { method: "DELETE" }).then(async (r) => {
+      if (!r.ok) throw await erroDe(r);
+    }),
+
+  /** D33: encerra (libera as chaves) ou reabre todos os eventos do grupo. */
+  mudarSituacaoGrupo: (
+    nome: string,
+    situacao: "encerrado" | "em andamento",
+    confirmacao?: string,
+  ) => {
+    // D34: encerrar pede o nome do grupo digitado; o servidor confere
+    const q = new URLSearchParams({ situacao });
+    if (confirmacao !== undefined) q.set("confirmacao", confirmacao);
+    return pedir<{ grupo: string; situacao: string; eventos: number; folhas_religadas: number }>(
+      `/grupos/${encodeURIComponent(nome)}/situacao?${q}`,
+      { method: "POST" },
+    );
+  },
+
+  /** Todos ou nenhum. Grupo vazio tira os eventos do grupo. */
+  porNoGrupo: (eventoIds: number[], grupo: string | null) =>
+    pedir<{ alterados: number; grupo: string | null }>("/grupos/eventos", {
+      method: "POST",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ evento_ids: eventoIds, grupo }),
+    }),
+
+  quarentenaDoGrupo: (nome: string) =>
+    pedir<LinhaDoGrupo[]>(`/grupos/${encodeURIComponent(nome)}/quarentena`),
+
+  urlFrequencia: (nome: string, formato: "xlsx" | "json") =>
+    `/api/grupos/${encodeURIComponent(nome)}/frequencia.${formato}`,
+
+  /** Não apaga nada: diz quantas sairiam e quantas ficam. */
+  previaApagarTodas: (incluirRevisadas: boolean) =>
+    pedir<PreviaApagar>(`/folhas/apagar-todas?incluir_revisadas=${incluirRevisadas}`),
+
+  /** `confirmacao` é o número que a pessoa digitou. Se a conta do servidor der
+   *  outro (chegou folha entre a prévia e o clique), nada sai e volta 409. */
+  apagarTodas: (confirmacao: number, incluirRevisadas: boolean) =>
+    pedir<PreviaApagar>("/folhas/apagar-todas", {
+      method: "POST",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ confirmacao, incluir_revisadas: incluirRevisadas }),
+    }),
+
+  previaApagarDoGrupo: (nome: string, incluirRevisadas: boolean) =>
+    pedir<PreviaApagar>(
+      `/grupos/${encodeURIComponent(nome)}/apagar-folhas?incluir_revisadas=${incluirRevisadas}`,
+    ),
+
+  apagarDoGrupo: (nome: string, confirmacao: number, incluirRevisadas: boolean) =>
+    pedir<PreviaApagar>(`/grupos/${encodeURIComponent(nome)}/apagar-folhas`, {
+      method: "POST",
+      headers: JSON_CORPO,
+      body: JSON.stringify({ confirmacao, incluir_revisadas: incluirRevisadas }),
+    }),
 };
 
 /** Uma folha leva ~9 s para ser lida, então o cliente pergunta em vez de

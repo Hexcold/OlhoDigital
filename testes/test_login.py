@@ -28,6 +28,9 @@ IMPRESSAO = {
     ("POST", "/api/impressao/cabecalho/previa"), ("POST", "/api/impressao/folhas"),
     ("GET", "/api/impressao/planilha/modelo"), ("POST", "/api/impressao/planilha"),
     ("POST", "/api/impressao/pdf"),
+    # D35, fase 3: abrir o pacote de um grupo. Sem banco, não grava nada e só devolve o que o
+    # próprio arquivo trouxe (o modelo e as chaves) — nenhum dado de aluno.
+    ("POST", "/api/impressao/pacote"),
 }
 
 

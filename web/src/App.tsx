@@ -31,8 +31,9 @@ export default function App() {
   const abas = soImpressao
     ? []
     : [
-        { para: "/", texto: "folhas" },
-        { para: "/eventos", texto: "eventos" },
+        { para: "/", texto: "grupos" },
+        { para: "/folhas", texto: "todas as folhas" },
+        { para: "/eventos", texto: "todos os eventos" },
         { para: "/impressao", texto: "impressão" },
       ];
 
@@ -40,17 +41,16 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-10 bg-marca-700 text-white shadow-sm">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
-          <Link to="/" className="flex items-baseline gap-2">
-            <span className="text-lg font-semibold tracking-tight">
-              OlhoDigital
-            </span>
+          <Link to="/" className="flex items-center gap-3">
+            {/* a marca (web/marca/gerar_marca.py): o nome vai em contornos, igual em todo lugar */}
+            <img src="/marca/olhodigital-branco.svg" alt="OlhoDigital" className="h-7" />
             <span className="hidden text-xs text-marca-200 sm:inline">
               frequência a partir de listas manuscritas
             </span>
           </Link>
           {naRevisao ? (
             <Link
-              to="/"
+              to="/folhas"
               className="ml-auto rounded px-2 py-1 text-sm text-marca-100 underline-offset-2 hover:bg-marca-600 hover:text-white"
             >
               ← folhas
@@ -62,7 +62,7 @@ export default function App() {
                   key={para}
                   to={para}
                   className={`rounded px-2 py-1 ${
-                    pathname === para
+                    (para === "/" ? pathname === "/" || pathname.startsWith("/grupos/") : pathname === para)
                       ? "bg-marca-600 text-white"
                       : "text-marca-100 hover:bg-marca-600 hover:text-white"
                   }`}

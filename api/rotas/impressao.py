@@ -19,7 +19,7 @@ from fastapi.responses import Response
 
 from ..config import config
 from ..esquemas import (CabecalhoFolha, CabecalhoSaida, ItemLote, LoteSaida,
-                        PedidoFolhas, PedidoPdf, PedidoPrevia)
+                        PacoteGrupo, PacoteSaida, PedidoFolhas, PedidoPdf, PedidoPrevia)
 
 rotas = APIRouter(prefix="/impressao", tags=["impressão"])
 
@@ -91,8 +91,9 @@ def gerar_folhas(pedido: PedidoFolhas) -> Response:
     with tempfile.TemporaryDirectory() as tmp:
         caminho = Path(tmp) / "folhas.pdf"
         try:
-            resumo = lf.gerar_avulsas(pedido.chave, pedido.folhas,
-                                      lf.carregar_cabecalho(), str(caminho))
+            base = (lf.gf.Cabecalho(**pedido.cabecalho.model_dump()) if pedido.cabecalho
+                    else lf.carregar_cabecalho())
+            resumo = lf.gerar_avulsas(pedido.chave, pedido.folhas, base, str(caminho))
         except ValueError as erro:
             raise HTTPException(422, str(erro)) from erro
         rotulo = pedido.chave.strip().upper() or "sem_chave"
@@ -130,11 +131,51 @@ def gerar_pdf(pedido: PedidoPdf) -> Response:
     with tempfile.TemporaryDirectory() as tmp:
         caminho = Path(tmp) / "lote.pdf"
         try:
-            resumo = lf.gerar_pdf(_itens(lf, pedido.itens), lf.carregar_cabecalho(),
-                                  str(caminho), pedido.aceitar_alertas)
+            # D35, fase 3: o modelo do grupo e os ajustes por chave vêm no pedido
+            base = (lf.gf.Cabecalho(**pedido.cabecalho.model_dump()) if pedido.cabecalho
+                    else lf.carregar_cabecalho())
+            ajustes = {c.strip().upper(): a.model_dump(exclude_none=True)
+                       for c, a in (pedido.ajustes or {}).items()}
+            resumo = lf.gerar_pdf(_itens(lf, pedido.itens), base, str(caminho),
+                                  pedido.aceitar_alertas, ajustes)
         except lf.AlertasPendentes as pendentes:
             raise HTTPException(409, str(pendentes)) from pendentes
         except ValueError as erro:
             raise HTTPException(422, str(erro)) from erro
         nome = f"folhas_{resumo['chaves']}chaves_{resumo['paginas']}paginas.pdf"
         return _anexo(caminho.read_bytes(), "application/pdf", nome)
+
+
+FORMATO_PACOTE = "olhodigital-pacote"
+
+
+@rotas.post("/pacote", response_model=PacoteSaida)
+def abrir_pacote(arquivo: UploadFile = File(...)) -> PacoteSaida:
+    """Abre o pacote de impressão de um grupo (D35, fase 3): o modelo, os ajustes por evento e
+    as chaves, exportados pelo sistema completo. É como o PC de impressão (D19), que não tem
+    banco, imprime com o modelo do grupo. Não grava nada: devolve o lote para a tela gerar.
+    """
+    lf = _lote()
+    conteudo = arquivo.file.read(LIMITE_PLANILHA_BYTES + 1)
+    if len(conteudo) > LIMITE_PLANILHA_BYTES:
+        raise HTTPException(413, "o pacote passa de 5 MB")
+    try:
+        pacote = PacoteGrupo.model_validate_json(conteudo)
+    except ValueError as erro:
+        raise HTTPException(422, "não é um pacote de impressão do OlhoDigital (.json)") from erro
+    if pacote.formato != FORMATO_PACOTE or pacote.versao != 1:
+        raise HTTPException(422, f"pacote de formato {pacote.formato!r} versão "
+                                 f"{pacote.versao}; este programa abre {FORMATO_PACOTE} v1")
+    base = lf.gf.Cabecalho(**pacote.cabecalho.model_dump())
+    try:
+        lf.conferir_cabecalho(base)
+        for chave, ajuste in pacote.ajustes.items():
+            lf.conferir_cabecalho(lf.combinar(base, ajuste.model_dump(exclude_none=True)))
+    except ValueError as erro:
+        raise HTTPException(422, f"o modelo do pacote não passa no portão da folha: {erro}") from erro
+    itens = _itens(lf, pacote.itens)
+    erros, alertas = lf.validar_lote(itens)
+    return PacoteSaida(grupo=pacote.grupo, cabecalho=pacote.cabecalho, ajustes=pacote.ajustes,
+                       lote=LoteSaida(itens=pacote.itens, erros=erros, alertas=alertas,
+                                      total_chaves=len(itens),
+                                      total_folhas=sum(i.folhas for i in itens)))

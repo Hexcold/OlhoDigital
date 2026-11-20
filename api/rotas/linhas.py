@@ -69,9 +69,30 @@ def revisar(linha_id: int, entrada: RevisaoEntrada,
         if existe is None:
             raise HTTPException(
                 422, f"matrícula {entrada.matricula_escolhida} não está na base "
-                     "de participantes; use null para 'não identificado'")
+                     "de participantes; use 'não está na base' ou 'não identificado'")
 
-    revisao = Revisao(linha_id=linha.id, **entrada.model_dump())
+    dados = entrada.model_dump()
+    # D32: "não está na base" exige a matrícula. Sem ela, é "não identificado" (decisão do
+    # autor em 20/11): presença sem matrícula não identifica ninguém.
+    informada = (entrada.matricula_informada or "").strip()
+    if entrada.matricula_informada is not None and not informada:
+        dados["matricula_informada"] = dados["nome_informado"] = None
+    elif informada:
+        if entrada.matricula_escolhida is not None:
+            raise HTTPException(422, "escolha uma pessoa da base OU diga que não está na base")
+        if not informada.isdigit() or not 5 <= len(informada) <= 6:
+            raise HTTPException(
+                422, f"matrícula {informada!r}: são 5 ou 6 dígitos (uma matrícula da base "
+                     "tem 5)")
+        na_base = db.get(Participante, informada)
+        if na_base is not None:
+            raise HTTPException(
+                422, f"a matrícula {informada} está na base ({na_base.nome}); escolha a "
+                     "pessoa em vez de 'não está na base'")
+        dados["matricula_informada"] = informada
+        dados["nome_informado"] = " ".join((entrada.nome_informado or "").split()) or None
+
+    revisao = Revisao(linha_id=linha.id, **dados)
     db.add(revisao)
     db.commit()
     return revisao

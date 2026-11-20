@@ -51,6 +51,11 @@ class Config(BaseSettings):
     # explícito e registrado, não um padrão esquecido.
     modelo_letras: str = ""
 
+    # As listas de matriculados enviadas pela tela (D25). Dado pessoal: fora do
+    # git como `dados/` inteiro, e no Docker num volume, porque a pasta da base
+    # do repositório entra lá só para leitura.
+    pasta_bases: Path = RAIZ / "experimento-imagem" / "dados" / "bases"
+
     # As contas do sistema. Fora do git, com a senha em hash. Ver `api/usuarios.py`.
     arquivo_usuarios: Path = RAIZ / "experimento-imagem" / "dados" / "usuarios.json"
 

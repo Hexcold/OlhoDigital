@@ -26,7 +26,7 @@ ROTAS = {("GET", "/eu"), ("GET", "/saude"),
          ("GET", "/impressao/cabecalho"), ("PUT", "/impressao/cabecalho"),
          ("POST", "/impressao/cabecalho/previa"), ("POST", "/impressao/folhas"),
          ("GET", "/impressao/planilha/modelo"), ("POST", "/impressao/planilha"),
-         ("POST", "/impressao/pdf")}
+         ("POST", "/impressao/pdf"), ("POST", "/impressao/pacote")}
 FORA_DO_PACOTE = ("sqlalchemy", "psycopg", "torch", "keras", "sklearn", "api.pipeline",
                   "api.db", "api.tabelas", "api.usuarios", "api.sessao",
                   "identificar_folha", "ocr", "base_alunos", "quarentena")

@@ -32,7 +32,9 @@ export type Situacao =
   | "aguardando_revisao"
   /** Sem quarentena em aberto, e sem ninguém ter conferido. */
   | "pronta"
-  | "revisada";
+  | "revisada"
+  /** D30: outro escaneamento de uma folha que já conta. Não conta presença. */
+  | "copia";
 export type Decisao = "aceito" | "quarentena" | "anulada";
 
 /** Por que uma célula não virou caractere. Distingue "não escreveu" de
@@ -75,11 +77,17 @@ export interface Evento {
   categoria: Categoria | null;
   horas_complementares: number | null;
   orgao_promotor: string | null;
+  /** O grupo de eventos (D24): as ocorrências de uma mesma edição de algo maior,
+   *  como todos os eventos dos Encontros no grupo "EU". Nulo é sem grupo. */
+  grupo: string | null;
   criado_em: string;
   /** Contagem, não a lista. O nome não é `folhas` de propósito: no servidor
    *  esse nome é o relacionamento do ORM, e a colisão fez o Pydantic devolver
    *  a lista no lugar do número. */
   folhas_enviadas: number;
+  /** D35, fase 3: o que este evento troca no modelo da folha do grupo. */
+  cabecalho_ajuste?: CabecalhoAjuste | null;
+  folhas_previstas?: number | null;
 }
 
 export interface Folha {
@@ -88,7 +96,7 @@ export interface Folha {
   /** A chave como foi lida, com "?" no que não deu para ler. */
   chave_lida: string | null;
   /** Como o vínculo foi feito. Nulo é folha sem evento, na bandeja. */
-  origem_vinculo: "automatico" | "confirmado" | "corrigido" | "informado" | null;
+  origem_vinculo: "automatico" | "confirmado" | "corrigido" | "informado" | "removido" | null;
   evento_chave: string | null;
   nome_original: string;
   /** Um PDF de escâner traz uma folha por página — o formato real das 500. */
@@ -113,6 +121,21 @@ export interface Folha {
    *  "esta folha foi conferida" — as duas têm zero pendências. */
   revisada_em: string | null;
   revisada_por: string | null;
+  /** D35: o grupo do evento da folha. */
+  evento_grupo?: string | null;
+  /** D35, fase 5: o grupo de onde a folha foi enviada; a chave casa só com ele. */
+  grupo_envio?: string | null;
+  /** D30: esta folha é outro escaneamento da folha `copia_de`, que é a que conta. */
+  copia_de?: number | null;
+  copia_de_rotulo?: string | null;
+  /** Fração das linhas que bateram com a outra folha, na mesma posição. */
+  semelhanca_copia?: number | null;
+  nao_e_copia?: boolean;
+  /** D29: o marcador (0 a 3) cujo canto foi estimado pelos outros três; nulo com os 4. */
+  marcador_estimado?: number | null;
+  /** A61: a imagem foi trocada por outro escaneamento do mesmo papel. */
+  reescaneada_em?: string | null;
+  arquivo_reescaneado?: string | null;
 
   /** Derivados no servidor — ver `Situacao`. */
   situacao: Situacao;
@@ -161,11 +184,24 @@ export interface Linha {
   revisao: Revisao | null;
 }
 
+/** Uma linha da quarentena do grupo: a da revisão, mais de onde ela veio. */
+export interface LinhaDoGrupo extends Linha {
+  evento_chave: string;
+  evento_nome: string;
+  folha_nome: string;
+  folha_pagina: number;
+  /** Folha concluída: a linha vira leitura, como na revisão de uma folha. */
+  folha_concluida: boolean;
+}
+
 export interface Revisao {
   id: number;
   linha_id: number;
   /** null é decisão legítima — "não identificado" —, não ausência de decisão. */
   matricula_escolhida: string | null;
+  /** D32: "não está na base" — a matrícula e o nome conferidos por quem revisou. */
+  matricula_informada?: string | null;
+  nome_informado?: string | null;
   revisor: string | null;
   ms: number | null;
   criado_em: string;
@@ -200,6 +236,27 @@ export interface CabecalhoResposta {
   limite_caracteres: number;
   /** O que o editor não alcança. Vem do servidor, que é quem garante. */
   travado: string[];
+}
+
+/** D35, fase 3: o que um evento troca no modelo do grupo. Ausente fica como no grupo. */
+export type CabecalhoAjuste = Partial<Record<keyof CabecalhoFolha, string | null>>;
+
+/** O modelo da folha de um grupo: o que vale, se é próprio, e os ajustes por chave. */
+export interface ModeloGrupo extends CabecalhoResposta {
+  proprio: boolean;
+  ajustes: Record<string, CabecalhoAjuste>;
+}
+
+/** O que vai junto do pedido de PDF para imprimir com o modelo de um grupo. */
+export interface ModeloPedido {
+  cabecalho: CabecalhoFolha;
+  ajustes: Record<string, CabecalhoAjuste>;
+}
+
+/** O pacote de impressão de um grupo, aberto no PC de quem imprime (D19). */
+export interface PacoteAberto extends ModeloPedido {
+  grupo: string;
+  lote: Lote;
 }
 
 export interface ItemLote {
@@ -239,6 +296,8 @@ export interface EventoSugerido {
 export interface SugestaoEventos {
   motivo: string;
   candidatos: EventoSugerido[];
+  /** D33: a chave do primeiro candidato já foi de um evento encerrado. */
+  aviso?: string | null;
 }
 
 export interface Sessao {
@@ -246,4 +305,59 @@ export interface Sessao {
   papel: "admin" | "impressao";
   /** Falso no desenvolvimento local, onde não há login. */
   login: boolean;
+}
+
+/** Um grupo de eventos em uso. Não há cadastro de grupo à parte: a lista é a dos
+ *  nomes que algum evento tem, e o grupo some quando o último evento sai dele. */
+/** D35: a etapa do grupo no fluxo. */
+export type EtapaGrupo = "preparando" | "recebendo" | "revisando" | "pronto" | "encerrado";
+
+export interface Grupo {
+  nome: string;
+  descricao?: string | null;
+  etapa?: EtapaGrupo;
+  /** quarentena sem decisão nas folhas que contam */
+  pendentes?: number;
+  eventos: number;
+  folhas: number;
+  folhas_revisadas: number;
+  /** D33: quantos eventos do grupo ainda estão abertos (com a chave valendo). */
+  eventos_abertos?: number;
+  /** D30: outros escaneamentos de um papel que já conta; não contam. */
+  copias?: number;
+  /** Papéis escaneados uma vez só. */
+  leitura_unica?: number;
+  /** Papéis que contam e têm outro escaneamento guardado. */
+  com_copia?: number;
+}
+
+/** O que um apagar em massa vai fazer, antes de fazer. As revisadas carregam a
+ *  frequência apurada e só saem marcando a opção; as na fila nunca saem no meio
+ *  da leitura. */
+export interface PreviaApagar {
+  apagar: number;
+  revisadas_mantidas: number;
+  na_fila_mantidas: number;
+}
+
+/** O progresso da leitura (`GET /folhas/fila`). O "lote" são as folhas que entraram na fila
+ *  desde a mais antiga das que ainda faltam. */
+export interface Fila {
+  na_fila: number;
+  lendo: number;
+  lote_total: number;
+  lote_prontas: number;
+  lendo_agora: string | null;
+  segundos_por_folha: number;
+  estimativa_s: number;
+}
+
+/** D35, fase 4: uma chave sugerida, livre e segura para impressão. */
+export interface ChaveSugerida {
+  chave: string;
+  /** fração das letras que o leitor nunca erra (A49) */
+  letras_seguras: number;
+  /** a chave aberta mais próxima, e a distância até ela (≥ 4, A45) */
+  mais_proxima: string | null;
+  distancia: number | null;
 }

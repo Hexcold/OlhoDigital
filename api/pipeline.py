@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import config
+from .esquemas import sem_matricula
 
 # Uma folha por vez — ver o cabeçalho.
 _TRAVA = threading.Lock()
@@ -45,6 +46,16 @@ def preparar() -> None:
     caminho = str(config.pasta_pipeline)
     if caminho not in sys.path:
         sys.path.insert(0, caminho)
+    # `fuzzy` e `normalizacao` moram em experimento-fuzzy. Antes, só entravam no caminho quando
+    # alguém importava `identificar_folha` (que faz o append), e o `reenvio` (D30), chamado
+    # antes de qualquer leitura num processo novo, quebrava com "No module named 'fuzzy'".
+    fuzzy = str(config.pasta_pipeline.parent / "experimento-fuzzy")
+    if fuzzy not in sys.path:
+        sys.path.insert(0, fuzzy)
+    # D29: no servidor, uma folha com 3 marcadores é lida com o quarto canto estimado, e a
+    # folha leva a marca (`Folha.marcador_estimado`). Nos experimentos fica desligado.
+    import align                                                  # noqa: E402
+    align.Align.ESTIMAR_QUARTO = True
     if Path.cwd() != config.pasta_pipeline:
         os.chdir(config.pasta_pipeline)
 
@@ -116,6 +127,10 @@ def marcar_duplicadas(linhas: list[dict]) -> int:
     for r in linhas:
         if r["decisao"] == "anulada" or not r.get("matricula_sugerida"):
             continue
+        # D26: sem dígito lido, o sugerido é palpite do nome sozinho, e duas linhas
+        # vazias de matrícula empatam no mesmo palpite. Não é a pessoa repetida.
+        if sem_matricula(r.get("motivos_matricula")):
+            continue
         vistas.setdefault(r["matricula_sugerida"], []).append(r)
 
     marcadas = 0
@@ -143,19 +158,47 @@ def conferir_marcadores(caminho_imagem: Path) -> int:
     folha que não detecta de ir para a impressora (D10) — ela detecta de 150 a
     600 dpi. Ausência de marcador é, portanto, ausência de folha; o que o teste
     NÃO distingue é folha de presença de uma digitalização muito ruim de uma,
-    e por isso a mensagem diz "não parece" em vez de afirmar.
+    e por isso a mensagem diz "não parece" em vez de afirmar. Com três, afirma: ver
+    `mensagem_marcadores`.
     """
-    import cv2
+    return len(marcadores_encontrados(caminho_imagem))
 
+
+# o canto de cada marcador, como `Align.aruco` os usa
+CANTOS = {0: "superior esquerdo", 1: "superior direito", 2: "inferior esquerdo",
+          3: "inferior direito"}
+
+
+def marcadores_encontrados(caminho_imagem: Path) -> set[int]:
+    """Quais dos 4 marcadores da folha (ids 0 a 3) o detector acha."""
     preparar()
     from image import Image                                       # noqa: E402
+    from align import detectar_marcadores                         # noqa: E402
 
     dados = Image().load_from_file(str(caminho_imagem)).data
-    detector = cv2.aruco.ArucoDetector(
-        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
-        cv2.aruco.DetectorParameters())
-    _, ids, _ = detector.detectMarkers(dados)
-    return 0 if ids is None else len(ids)
+    # o mesmo detector do alinhamento, com o segundo passe: o portão e o warp não podem
+    # discordar sobre uma folha (A61)
+    return set(detectar_marcadores(dados)[0]) & set(CANTOS)
+
+
+def mensagem_marcadores(encontrados: set[int]) -> str:
+    """O que dizer a quem enviou uma folha com marcador faltando.
+
+    Com TRÊS marcadores a folha é quase certamente de presença: nenhum outro papel traz três
+    marcadores deste dicionário. Então a mensagem afirma, diz qual canto falta e aponta as
+    duas causas vistas na coleta (A61): a folha torta no alimentador, com o canto fora da
+    área escaneada, e o vinco que atravessa o marcador. Com menos que três, continua "não
+    parece", porque aí pode mesmo ser outro documento.
+    """
+    faltam = sorted(set(CANTOS) - encontrados)
+    if len(encontrados) == 3:
+        return (f"3 de 4 marcadores — é uma folha de presença, mas o marcador do canto "
+                f"{CANTOS[faltam[0]]} não foi lido. Causas comuns: a folha entrou torta no "
+                "alimentador e esse canto ficou fora da área escaneada, ou um vinco atravessa "
+                "o marcador. Reescaneie esta folha reta e use \"trocar escaneamento\".")
+    return (f"{len(encontrados)} de 4 marcadores ArUco encontrados — não parece uma folha "
+            "de presença. Se for uma, a digitalização pode ter cortado os cantos ou ficado "
+            "clara demais; reescaneie e use \"trocar escaneamento\".")
 
 
 def pasta_recortes(caminho_imagem: Path) -> Path:

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ErroApi, esperarProcessamento } from "../api";
-import type { Folha, SugestaoEventos } from "../tipos";
+import { api, ErroApi } from "../api";
+import { ApagarEmMassa } from "../componentes/ApagarEmMassa";
+import type { Fila, Folha, SugestaoEventos } from "../tipos";
+
+/** O canto de cada marcador da folha, como o alinhamento os usa (D29). */
+const CANTOS: Record<number, string> = {
+  0: "superior esquerdo",
+  1: "superior direito",
+  2: "inferior esquerdo",
+  3: "inferior direito",
+};
 
 const ROTULO: Record<Folha["situacao"], { texto: string; classe: string }> = {
   recebida: { texto: "na fila", classe: "bg-slate-100 text-slate-700" },
@@ -13,6 +22,7 @@ const ROTULO: Record<Folha["situacao"], { texto: string; classe: string }> = {
   },
   pronta: { texto: "pronta, sem revisão", classe: "bg-sky-100 text-sky-900" },
   revisada: { texto: "revisada", classe: "bg-emerald-100 text-emerald-800" },
+  copia: { texto: "outro escaneamento", classe: "bg-violet-100 text-violet-800" },
   suspeita: { texto: "suspeita", classe: "bg-orange-100 text-orange-900" },
   nao_e_folha: {
     texto: "não é folha de presença",
@@ -35,6 +45,7 @@ const ORIGEM: Record<NonNullable<Folha["origem_vinculo"]>, string> = {
   confirmado: "confirmado por uma pessoa",
   corrigido: "corrigido por uma pessoa",
   informado: "informado no envio",
+  removido: "tirado do evento por uma pessoa",
 };
 
 /** O evento da folha, ou a bandeja quando ela não foi ligada a nenhum.
@@ -114,6 +125,12 @@ function Vinculo({ folha, aoMudar }: { folha: Folha; aoMudar: () => void }) {
         )}
       </p>
       {sugestao && <p className="mt-0.5 text-xs">{sugestao.motivo}.</p>}
+      {sugestao?.aviso && (
+        // D33: a chave já foi de um evento encerrado; a folha pode ser atrasada
+        <p className="mt-1 rounded bg-amber-100 px-2 py-1 text-xs text-amber-900">
+          {sugestao.aviso}
+        </p>
+      )}
       {!semTira && (
         <img
           src={api.urlTiraChave(folha.id)}
@@ -178,6 +195,7 @@ function Cartao({
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [modelos, setModelos] = useState<string[]>([]);
+  const seletor = useRef<HTMLInputElement>(null);
   const temLinhas =
     folha.estado === "processada" || folha.estado === "suspeita";
   const revisada = folha.situacao === "revisada";
@@ -202,6 +220,48 @@ function Cartao({
     } finally {
       setOcupado(false);
       setModelos([]);
+    }
+  }
+
+  async function trocarEscaneamento(arquivo: File) {
+    // A61: o mesmo papel escaneado de novo, na MESMA folha — sem criar uma segunda folha
+    // que contaria todo mundo em dobro.
+    const temTrabalho = folha.situacao === "revisada" || (temLinhas && folha.pendentes === 0);
+    if (
+      temTrabalho &&
+      !confirm(
+        `Trocar o escaneamento de "${folha.nome_original}"? ` +
+          "As leituras e as decisões humanas desta folha são descartadas.",
+      )
+    )
+      return;
+    setOcupado(true);
+    setErro(null);
+    try {
+      await api.substituirEscaneamento(folha.id, arquivo, temTrabalho);
+      aoMudar();
+    } catch (e) {
+      setErro(e instanceof ErroApi ? e.message : String(e));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function decidirCopia(acao: "usar" | "nao") {
+    const texto =
+      acao === "usar"
+        ? "Usar ESTE escaneamento no lugar do outro? As decisões tomadas no outro ficam guardadas, mas deixam de contar."
+        : "Marcar como papel diferente? As duas folhas passam a contar na frequência.";
+    if (!confirm(texto)) return;
+    setOcupado(true);
+    setErro(null);
+    try {
+      await (acao === "usar" ? api.usarCopia(folha.id) : api.naoECopia(folha.id));
+      aoMudar();
+    } catch (e) {
+      setErro(e instanceof ErroApi ? e.message : String(e));
+    } finally {
+      setOcupado(false);
     }
   }
 
@@ -232,6 +292,51 @@ function Cartao({
         </span>
         <Selo situacao={folha.situacao} />
       </div>
+
+      {folha.copia_de != null && (
+        <div className="mt-2 rounded bg-violet-50 px-2 py-1.5 text-xs text-violet-900">
+          <p>
+            Outro escaneamento de{" "}
+            <strong>{folha.copia_de_rotulo ?? `folha ${folha.copia_de}`}</strong>
+            {folha.semelhanca_copia != null && (
+              <> ({Math.round(folha.semelhanca_copia * 100)}% das linhas batem)</>
+            )}
+            . Esta cópia não conta na frequência nem na quarentena.
+          </p>
+          <div className="mt-1 flex flex-wrap gap-3">
+            <button
+              onClick={() => decidirCopia("usar")}
+              disabled={ocupado}
+              className="underline hover:text-violet-700 disabled:opacity-50"
+            >
+              usar esta no lugar
+            </button>
+            <button
+              onClick={() => decidirCopia("nao")}
+              disabled={ocupado}
+              className="underline hover:text-violet-700 disabled:opacity-50"
+            >
+              não é o mesmo papel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {folha.marcador_estimado != null && (
+        <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">
+          Lida com 3 marcadores: o do canto{" "}
+          {CANTOS[folha.marcador_estimado] ?? folha.marcador_estimado} não foi lido e a
+          posição dele foi estimada pelos outros três. A leitura costuma sair um pouco pior;
+          se esta folha tiver muita quarentena, reescaneie-a reta e use “trocar escaneamento”.
+        </p>
+      )}
+
+      {folha.reescaneada_em && (
+        <p className="mt-1 text-xs text-slate-500">
+          reescaneada em {new Date(folha.reescaneada_em).toLocaleString("pt-BR")}
+          {folha.arquivo_reescaneado && <> · {folha.arquivo_reescaneado}</>}
+        </p>
+      )}
 
       {folha.erro && (
         <p className="mt-2 rounded bg-rose-50 px-2 py-1 font-mono text-xs text-rose-800">
@@ -290,6 +395,29 @@ function Cartao({
             className="rounded px-2 py-1.5 text-sm text-slate-500 hover:bg-marca-50 hover:text-marca-700 disabled:opacity-50"
           >
             {ocupado ? "…" : "reavaliar"}
+          </button>
+          <input
+            ref={seletor}
+            type="file"
+            accept="image/*,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const arquivo = e.target.files?.[0];
+              e.target.value = "";
+              if (arquivo) trocarEscaneamento(arquivo);
+            }}
+          />
+          <button
+            onClick={() => seletor.current?.click()}
+            disabled={ocupado}
+            title="Enviar outro escaneamento deste mesmo papel (imagem ou PDF de uma página)"
+            className={
+              folha.estado === "nao_e_folha" || folha.estado === "erro"
+                ? "rounded bg-marca-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-marca-600 disabled:opacity-50"
+                : "rounded px-2 py-1.5 text-sm text-slate-500 hover:bg-marca-50 hover:text-marca-700 disabled:opacity-50"
+            }
+          >
+            trocar escaneamento
           </button>
           <button
             onClick={apagar}
@@ -360,7 +488,59 @@ function Cartao({
   );
 }
 
+/** "cerca de 7 min", para a estimativa da fila. */
+function duracao(segundos: number): string {
+  if (segundos < 60) return "menos de 1 min";
+  if (segundos < 3600) return `cerca de ${Math.round(segundos / 60)} min`;
+  const h = Math.floor(segundos / 3600);
+  return `cerca de ${h} h ${Math.round((segundos % 3600) / 60)} min`;
+}
+
+function Barra({ fracao }: { fracao: number }) {
+  return (
+    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+      <div
+        className="h-full rounded-full bg-marca-500 transition-all"
+        style={{ width: `${Math.round(Math.min(1, Math.max(0, fracao)) * 100)}%` }}
+      />
+    </div>
+  );
+}
+
+/** A leitura em andamento: quantas faltam, qual está sendo lida e quanto tempo falta. Aparece
+ *  também para leituras que esta tela não começou (a fila retomada ao subir, o envio de outra
+ *  pessoa). */
+function ProgressoFila({ fila }: { fila: Fila }) {
+  const faltam = fila.na_fila + fila.lendo;
+  if (faltam === 0) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-marca-200 bg-marca-50 px-4 py-3 text-sm text-marca-900">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <span>
+          <strong>Lendo as folhas:</strong>{" "}
+          <span className="tabular-nums">
+            {fila.lote_prontas} de {fila.lote_total}
+          </span>{" "}
+          prontas
+        </span>
+        <span className="text-xs tabular-nums text-marca-700">
+          faltam {duracao(fila.estimativa_s)} · {fila.segundos_por_folha.toFixed(0)} s por folha
+        </span>
+      </div>
+      <Barra fracao={fila.lote_total ? fila.lote_prontas / fila.lote_total : 0} />
+      {fila.lendo_agora && (
+        <p className="mt-1 truncate text-xs text-marca-700">agora: {fila.lendo_agora}</p>
+      )}
+    </div>
+  );
+}
+
 export default function Folhas() {
+  return <PainelFolhas />;
+}
+
+/** D35: o envio, a fila e as folhas — de todos os grupos, ou de um (a aba "Envio"). */
+export function PainelFolhas({ grupo }: { grupo?: string }) {
   const [folhas, setFolhas] = useState<Folha[]>([]);
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -368,15 +548,27 @@ export default function Folhas() {
   const [saude, setSaude] = useState<Record<string, string> | null>(null);
   const [soBandeja, setSoBandeja] = useState(false);
   const controle = useRef<AbortController | null>(null);
+  // o progresso do envio: qual arquivo, que fração já subiu, e desde quando o servidor converte
+  const [envio, setEnvio] = useState<{
+    nome: string;
+    indice: number;
+    total: number;
+    fracao: number;
+    convertendoDesde: number | null;
+  } | null>(null);
+  const [agora, setAgora] = useState(Date.now());
+  const [fila, setFila] = useState<Fila | null>(null);
+  const [gatilhoFila, setGatilhoFila] = useState(0);
+  const ultimoEstadoFila = useRef("");
 
   const recarregar = useCallback(async () => {
     try {
-      setFolhas(await api.listarFolhas());
+      setFolhas(await api.listarFolhas(grupo));
       setErro(null);
     } catch (e) {
       setErro(e instanceof ErroApi ? e.message : String(e));
     }
-  }, []);
+  }, [grupo]);
 
   useEffect(() => {
     api.saude().then(setSaude).catch(() => setSaude(null));
@@ -386,30 +578,72 @@ export default function Folhas() {
     return () => c.abort();
   }, [recarregar]);
 
+  // A fila: uma pergunta a cada 2 s enquanto há leitura, a cada 15 s quando não há (para ver
+  // leituras que esta tela não começou). A lista só é recarregada quando a fila muda.
+  useEffect(() => {
+    let vivo = true;
+    let espera: number | undefined;
+    async function passo() {
+      try {
+        const f = await api.fila();
+        if (!vivo) return;
+        setFila(f);
+        const chave = `${f.na_fila}/${f.lendo}/${f.lote_prontas}`;
+        if (chave !== ultimoEstadoFila.current) {
+          if (ultimoEstadoFila.current) recarregar();
+          ultimoEstadoFila.current = chave;
+        }
+        espera = window.setTimeout(passo, f.na_fila + f.lendo > 0 ? 2000 : 15000);
+      } catch {
+        if (vivo) espera = window.setTimeout(passo, 5000);
+      }
+    }
+    passo();
+    return () => {
+      vivo = false;
+      window.clearTimeout(espera);
+    };
+  }, [recarregar, gatilhoFila]);
+
+  // o relógio da conversão do PDF, que acontece no servidor sem dar notícia
+  useEffect(() => {
+    if (!envio?.convertendoDesde) return;
+    const t = window.setInterval(() => setAgora(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [envio?.convertendoDesde]);
+
   const enviar = useCallback(
     async (arquivos: File[]) => {
       if (!arquivos.length) return;
       setEnviando(true);
       setErro(null);
       try {
-        for (const arquivo of arquivos) {
+        for (const [i, arquivo] of arquivos.entries()) {
           // Um envio pode virar VÁRIAS folhas: PDF de escâner traz uma folha
           // por página, que é o formato real das 500.
-          const criadas = await api.enviarFolha(arquivo);
+          setEnvio({ nome: arquivo.name, indice: i + 1, total: arquivos.length, fracao: 0,
+                     convertendoDesde: null });
+          await api.enviarFolhaComProgresso(arquivo, (fracao) =>
+            setEnvio((e) =>
+              e && {
+                ...e,
+                fracao,
+                convertendoDesde: fracao >= 1 ? (e.convertendoDesde ?? Date.now()) : null,
+              },
+            ),
+            grupo,
+          );
           await recarregar();
-          for (const folha of criadas) {
-            esperarProcessamento(folha.id, undefined, controle.current?.signal)
-              .then(recarregar)
-              .catch(() => {});
-          }
+          setGatilhoFila((g) => g + 1);     // a fila começa a andar: pergunta já
         }
       } catch (e) {
         setErro(e instanceof ErroApi ? e.message : String(e));
       } finally {
         setEnviando(false);
+        setEnvio(null);
       }
     },
-    [recarregar],
+    [recarregar, grupo],
   );
 
   const naFila = folhas.filter(
@@ -457,8 +691,25 @@ export default function Folhas() {
           onChange={(e) => enviar(Array.from(e.target.files ?? []))}
         />
         <div className="text-base font-medium text-marca-700">
-          {enviando ? "enviando…" : "Enviar folhas digitalizadas"}
+          {!enviando
+            ? "Enviar folhas digitalizadas"
+            : !envio
+              ? "enviando…"
+              : envio.convertendoDesde
+                ? `convertendo o PDF em páginas… ${Math.max(0, Math.round((agora - envio.convertendoDesde) / 1000))} s`
+                : `enviando ${envio.nome}${envio.total > 1 ? ` (${envio.indice} de ${envio.total})` : ""} — ${Math.round(envio.fracao * 100)}%`}
         </div>
+        {envio && !envio.convertendoDesde && (
+          <div className="mx-auto max-w-sm">
+            <Barra fracao={envio.fracao} />
+          </div>
+        )}
+        {envio?.convertendoDesde && (
+          <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
+            O arquivo chegou. O servidor está separando as páginas (um PDF de 60 páginas leva
+            um ou dois minutos); depois a leitura aparece abaixo, folha por folha.
+          </p>
+        )}
         <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
           PDF do escâner (uma folha por página) ou imagens. Toque para escolher,
           ou arraste os arquivos aqui.
@@ -467,6 +718,8 @@ export default function Folhas() {
           Cada folha leva cerca de 9 segundos, e são lidas uma por vez.
         </p>
       </label>
+
+      {fila && <ProgressoFila fila={fila} />}
 
       {erro && (
         <div className="mt-4 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
@@ -501,6 +754,17 @@ export default function Folhas() {
             </button>
           </span>
         </div>
+
+        {folhas.length > 0 && (
+          <div className="-mt-1 mb-3 flex justify-end">
+            <ApagarEmMassa
+              rotulo="apagar todas as folhas"
+              previa={api.previaApagarTodas}
+              apagar={api.apagarTodas}
+              aoApagar={() => void recarregar()}
+            />
+          </div>
+        )}
 
         {visiveis.length === 0 ? (
           <p className="rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">

@@ -113,4 +113,9 @@ mais fácil de apagar que linha de tabela. A tabela `revisao` é *append-only*, 
 o histórico existe para responder "quem mudou esta presença e quando", que é a
 pergunta do primeiro contencioso.
 
-Retenção e expurgo ainda **não** estão implementados. É pendência, não decisão.
+O expurgo é manual: apagar as folhas de um grupo de eventos, ou todas, tira as
+linhas, as revisões, as imagens e os recortes (D24). As folhas já revisadas só
+saem marcando a opção, e as que ainda estão sendo lidas nunca saem. A planilha e
+o JSON de frequência do grupo levam matrícula e nome para fora do sistema: quem
+baixa passa a responder por eles. Retenção automática ainda **não** existe. É
+pendência, não decisão.

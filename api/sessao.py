@@ -28,7 +28,7 @@ ROTAS_IMPRESSAO = {
     ("GET", "/api/impressao/cabecalho"), ("PUT", "/api/impressao/cabecalho"),
     ("POST", "/api/impressao/cabecalho/previa"), ("POST", "/api/impressao/folhas"),
     ("GET", "/api/impressao/planilha/modelo"), ("POST", "/api/impressao/planilha"),
-    ("POST", "/api/impressao/pdf"),
+    ("POST", "/api/impressao/pdf"), ("POST", "/api/impressao/pacote"),
 }
 DOCUMENTACAO = ("/docs", "/redoc", "/openapi.json")
 

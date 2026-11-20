@@ -46,6 +46,45 @@ class MatriculaCompleta(unittest.TestCase):
         self.assertTrue(linha("9123#5", "OTONIEL").matricula_completa)
 
 
+class LinhaEmBranco(unittest.TestCase):
+    """D26: resíduo de grade (`sem_caixa`) não faz uma linha vazia existir."""
+
+    def test_so_residuo_no_nome_e_linha_em_branco(self):
+        # o caso da revisão de 20/11: matrícula sem tinta, nome com 5 células de resíduo
+        self.assertTrue(linha("      ", "#####").em_branco)
+        self.assertTrue(linha("      ", "########").em_branco)
+
+    def test_nome_lido_sem_matricula_continua_linha(self):
+        self.assertFalse(linha("      ", "ANA").em_branco)
+        self.assertFalse(linha("      ", "OTONIEL").em_branco)
+
+    def test_matricula_lida_sem_nome_continua_linha(self):
+        self.assertFalse(linha("9123##", "").em_branco)
+
+    def test_residuo_nao_completa_o_minimo(self):
+        # duas letras lidas e resíduo: abaixo do mínimo nos dois campos
+        self.assertTrue(linha("      ", "AN###").em_branco)
+
+    def test_tinta_da_linha_de_cima_nao_faz_linha(self):
+        # D27: o caso de 20/11, três dígitos lidos que eram a perna da escrita de cima
+        lin = linha("5  4 1", "###")
+        self.assertFalse(lin.em_branco)                 # sem a marca, a linha existe
+        for c in lin.celulas:
+            c.so_topo = c.motivo == "lido"
+        self.assertTrue(lin.em_branco)
+
+    def test_so_topo_numa_linha_real_nao_a_apaga(self):
+        lin = linha("912345", "OTONIEL")
+        lin.celulas_nome[7].so_topo = True              # uma perna no fim do nome
+        lin.celulas[0].so_topo = True
+        self.assertFalse(lin.em_branco)
+
+    def test_anulacao_continua_contando(self):
+        lin = linha("      ", "")
+        lin.celulas_nome[:3] = [Celula(None, 1.0, "anulada")] * 3
+        self.assertFalse(lin.em_branco)
+
+
 class Gate(unittest.TestCase):
     def test_identificar_barra_sem_a_matricula(self):
         ok = identificar("912345", "OTONIEL BARCELAR FURTADO", BASE)
@@ -85,8 +124,13 @@ class Gate(unittest.TestCase):
 
 class Motivo(unittest.TestCase):
     def test_servidor_diz_matricula_incompleta(self):
+        m = motivo_api(0.95, 0.30, 0.60, 0.05, ["lido"] * 4 + ["vazia"] * 2)
+        self.assertEqual(m, "matrícula incompleta: 2 de 6 células em branco")
+
+    def test_servidor_diz_sem_matricula(self):
+        # D26: nenhum dígito lido não é matrícula incompleta, é linha só com o nome
         m = motivo_api(0.95, 0.30, 0.60, 0.05, ["vazia"] * 6)
-        self.assertEqual(m, "matrícula incompleta: 6 de 6 células em branco")
+        self.assertEqual(m, "sem matrícula: só o nome foi preenchido")
 
     def test_servidor_sem_branco_mantem_o_motivo_de_antes(self):
         self.assertEqual(motivo_api(0.5, 0.30, 0.60, 0.05, ["lido"] * 6),

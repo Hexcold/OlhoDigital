@@ -28,8 +28,8 @@ from __future__ import annotations
 
 from datetime import datetime, date
 
-from sqlalchemy import (JSON, Boolean, Date, DateTime, Float, ForeignKey,
-                        Integer, String, Text, UniqueConstraint, func)
+from sqlalchemy import (JSON, Boolean, Date, DateTime, Float, ForeignKey, Index,
+                        Integer, String, Text, UniqueConstraint, func, text)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -41,6 +41,26 @@ Json = JSON().with_variant(JSONB, "postgresql")
 
 class Base(DeclarativeBase):
     pass
+
+
+class Grupo(Base):
+    """Um grupo de eventos: as ocorrências de uma mesma coleta (D35).
+
+    Era só um texto no evento (D24), de propósito, para não haver cadastro de grupos. O D35
+    pôs o grupo no centro do fluxo: ele é criado antes dos eventos, tem etapa e (na fase 3) o
+    modelo da folha. O evento continua apontando para ele PELO NOME, com chave estrangeira
+    `ON UPDATE CASCADE`: renomear o grupo renomeia em todos os eventos, e as rotas que já
+    usavam o nome seguem valendo.
+    """
+    __tablename__ = "grupo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(60), unique=True)
+    descricao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # D35, fase 3: o modelo da folha do grupo (os 4 textos editáveis de D16). Nulo é o
+    # padrão salvo em `cabecalho.json`: grupo que nunca mexeu imprime como antes.
+    cabecalho: Mapped[dict | None] = mapped_column(Json, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Evento(Base):
@@ -60,14 +80,19 @@ class Evento(Base):
     uma turma no relatório, o agrupamento é por (disciplina, turma, semestre).
     """
     __tablename__ = "evento"
+    # D33: a chave é única só entre os abertos (índice parcial, no Postgres e no SQLite)
+    __table_args__ = (Index("uq_evento_chave_aberta", "chave", unique=True,
+                            postgresql_where=text("situacao = 'em andamento'"),
+                            sqlite_where=text("situacao = 'em andamento'")),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # A junção impressa no papel. Única porque duas ocorrências com a mesma
-    # chave são indistinguíveis para o sistema — a folha iria para as duas.
+    # A junção impressa no papel. Única ENTRE OS EVENTOS ABERTOS (D33): duas ocorrências
+    # abertas com a mesma chave são indistinguíveis para o sistema — a folha iria para as
+    # duas. Encerrado, o evento guarda a chave dele, e ela fica livre para outro evento.
     # A–Z apenas (D14): é o que deixa a chave ser lida pelo classificador de 26
     # classes sem trazer de volta as confusões 0/O, 5/S, 2/Z e 1/I.
-    chave: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    chave: Mapped[str] = mapped_column(String(16), index=True)
     tipo: Mapped[str] = mapped_column(String(10))          # aula | evento
     nome: Mapped[str] = mapped_column(String(200))
     responsavel: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -83,6 +108,12 @@ class Evento(Base):
     # D07 aplicado a outro conjunto: contradomínio pequeno é o que torna o gate
     # fácil, e chave de semestre passado só atrapalha.
     situacao: Mapped[str] = mapped_column(String(20), default="em andamento")
+    # D35, fase 3: o que este evento troca no modelo do grupo (só campos de D16), e quantas
+    # folhas a planilha pediu para ele, que o pacote de impressão precisa saber
+    cabecalho_ajuste: Mapped[dict | None] = mapped_column(Json, nullable=True)
+    folhas_previstas: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # D33: quando foi encerrado. Entra no aviso da chave reaproveitada.
+    encerrado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # --- só quando tipo == 'aula'
     disciplina: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -95,6 +126,16 @@ class Evento(Base):
     categoria: Mapped[str | None] = mapped_column(String(50), nullable=True)
     horas_complementares: Mapped[float | None] = mapped_column(Float, nullable=True)
     orgao_promotor: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # O grupo de eventos: as ocorrências de uma mesma edição de algo maior, como todos os
+    # eventos dos Encontros Universitários no grupo "EU". Texto livre e opcional; a lista de
+    # grupos é a dos nomes em uso. É por ele que a frequência se baixa de uma vez e que as
+    # folhas se apagam juntas (D24). Não confundir com o agrupamento das FOLHAS, que é pela
+    # chave (D15): o grupo junta eventos, não folhas.
+    # D35: todo evento pertence a um grupo (garantido pela API; a coluna segue anulável para
+    # as fábricas dos testes antigos). A chave estrangeira é pelo nome, com cascata.
+    grupo: Mapped[str | None] = mapped_column(
+        String(60), ForeignKey("grupo.nome", onupdate="CASCADE"), nullable=True, index=True)
 
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -114,6 +155,12 @@ class Folha(Base):
                                                   nullable=True)
     # A chave como foi lida, com '?' no que não deu para ler.
     chave_lida: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # D35, fase 5: o grupo de onde a folha foi enviada (a aba Envio do grupo). A chave lida
+    # casa só com os eventos abertos DELE: contradomínio menor, casamento mais seguro (o
+    # raciocínio do D07 aplicado à chave). Nulo é o envio geral, que casa com todos os abertos.
+    grupo_envio: Mapped[str | None] = mapped_column(
+        String(60), ForeignKey("grupo.nome", onupdate="CASCADE", ondelete="SET NULL"),
+        nullable=True)
     # Como o vínculo foi feito: automatico | confirmado | corrigido | informado.
     # É o que deixa a acurácia da chave recuperável depois: sem isso o vínculo
     # existe e a medição some (D15).
@@ -150,8 +197,16 @@ class Folha(Base):
     # Nulos numa folha lida antes do D23, que foi decidida sem a regra e com o recorte v0.
     tau_nome: Mapped[float | None] = mapped_column(Float, nullable=True)
     recorte: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # D25: com qual lista de matriculados esta folha foi lida. Nulo numa folha
+    # lida antes das cargas existirem, que foi lida com a planilha de 21/08/2026.
+    carga_base_id: Mapped[int | None] = mapped_column(ForeignKey("carga_base.id"),
+                                                      nullable=True)
 
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # Quando a folha entrou na fila pela última vez (envio, releitura, troca de escaneamento).
+    # É o que delimita o "lote" no progresso da fila: `criado_em` não serve, porque uma folha
+    # antiga relida faria o lote parecer começar meses atrás.
+    na_fila_desde: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     processada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Concluir a revisão é ATO EXPLÍCITO, e não consequência de ter clicado em
@@ -161,6 +216,23 @@ class Folha(Base):
     # apenas não foi aberta ainda.
     revisada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     revisada_por: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # A61: a imagem foi trocada por outro escaneamento do mesmo papel. O rótulo
+    # (`nome_original` e `pagina`) continua o do lote: é o que diz a quem revisa de qual
+    # papel se trata. `origem_sha256` passa a ser o do arquivo novo, então reenviar esse
+    # arquivo pela porta normal devolve esta folha em vez de criar uma duplicata.
+    # D30: outro escaneamento do mesmo papel. A folha com `copia_de` não conta na frequência
+    # nem na quarentena do grupo: conta a folha para onde aponta. `semelhanca_copia` é a fração
+    # de linhas que bateram, e `nao_e_copia` é quem revisa dizendo que a detecção errou, para
+    # ela não remarcar a folha. Ver `api/reenvio.py`.
+    copia_de: Mapped[int | None] = mapped_column(ForeignKey("folha.id"), nullable=True)
+    semelhanca_copia: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nao_e_copia: Mapped[bool] = mapped_column(Boolean, default=False)
+    # D29: o marcador que faltava e cujo canto foi ESTIMADO pelos outros três (0 a 3). Nulo
+    # na folha lida com os 4. Viaja junto da leitura porque muda a confiança nela.
+    marcador_estimado: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reescaneada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    arquivo_reescaneado: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     evento: Mapped[Evento | None] = relationship(back_populates="folhas")
     linhas: Mapped[list["Linha"]] = relationship(
@@ -218,6 +290,12 @@ class Revisao(Base):
     # decisão. D03: a quarentena nunca descarta, mas o revisor pode não saber.
     matricula_escolhida: Mapped[str | None] = mapped_column(String(20),
                                                             nullable=True)
+    # D32: "não está na base". A pessoa estava lá e é legível, mas não está no contradomínio
+    # (externo, ou matriculado depois da extração da base). A revisão guarda a matrícula e o
+    # nome que quem revisou conferiu, para a presença não sumir da frequência. Com
+    # `matricula_informada`, `matricula_escolhida` é nula: são caminhos excludentes.
+    matricula_informada: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    nome_informado: Mapped[str | None] = mapped_column(String(200), nullable=True)
     revisor: Mapped[str | None] = mapped_column(String(120), nullable=True)
     ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -225,13 +303,43 @@ class Revisao(Base):
     linha: Mapped[Linha] = relationship(back_populates="revisoes")
 
 
+class CargaBase(Base):
+    """Um envio da lista de matriculados que foi APLICADO (D25).
+
+    A base vigente é "os matriculados na data" (D07), e essa data anda: gente
+    entra e sai durante o semestre. Trocar a base muda o que todo resultado
+    significa (A10: 22/22 na base nova contra 7/22 na velha), então cada troca
+    fica registrada com a data da extração e o que mudou, e cada folha guarda
+    com qual carga foi lida.
+    """
+    __tablename__ = "carga_base"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # A data da EXTRAÇÃO da lista, não a do envio. O .xlsx traz no nome da aba;
+    # o CSV do SIGAA não traz, e quem envia informa.
+    data_referencia: Mapped[date] = mapped_column(Date)
+    arquivo_original: Mapped[str] = mapped_column(String(300))
+    sha256: Mapped[str] = mapped_column(String(64))
+    aba: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # "envio" pela tela, ou "semente": a planilha do repositório registrada na
+    # primeira subida do servidor, para as folhas antigas terem a quem apontar.
+    origem: Mapped[str] = mapped_column(String(20), default="envio")
+    pessoas: Mapped[int] = mapped_column(Integer)
+    entraram: Mapped[int] = mapped_column(Integer, default=0)
+    voltaram: Mapped[int] = mapped_column(Integer, default=0)
+    sairam: Mapped[int] = mapped_column(Integer, default=0)
+    mudaram: Mapped[int] = mapped_column(Integer, default=0)
+    aplicada_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    aplicada_por: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
 class Participante(Base):
     """O contradomínio: quem pode ser identificado (D07).
 
-    Hoje uma tabela só, sem versão. A base vigente é "os matriculados NA DATA
-    da coleta" — 1.334 em 21/08/2026 —, e trocar a base muda o que todo
-    resultado significa (A10: 22/22 na base nova contra 7/22 na velha).
-    Versionar isto é pendência conhecida, não esquecimento.
+    Quem some de uma lista nova NÃO é apagado: fica `ativo=False` (D25). A
+    leitura de folhas só compara com os ativos, mas revisões e frequências de
+    eventos antigos continuam apontando para a pessoa, com nome. Apagar faria a
+    frequência de setembro perder o nome de quem trancou em outubro.
     """
     __tablename__ = "participante"
 
@@ -241,5 +349,9 @@ class Participante(Base):
     # nomes a cada tecla digitada na revisão
     nome_normalizado: Mapped[str] = mapped_column(String(200), index=True)
     curso: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # a carga em que deixou de constar; nulo enquanto ativo
+    saiu_na_carga: Mapped[int | None] = mapped_column(ForeignKey("carga_base.id"),
+                                                      nullable=True)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime,
                                                     server_default=func.now())

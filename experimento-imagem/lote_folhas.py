@@ -466,29 +466,60 @@ def planilha_modelo() -> bytes:
 
 # --- PDF ---------------------------------------------------------------------
 
+CAMPOS_AJUSTAVEIS = ("titulo", "subtitulo", "complemento", "instrucao")
+
+
+def combinar(base: gf.Cabecalho, ajuste: dict | None) -> gf.Cabecalho:
+    """O cabeçalho de um evento: o do grupo com os campos que o evento troca (D35, fase 3).
+
+    Só os quatro textos editáveis (D16) podem ser trocados; o resto da folha não tem campo.
+    Campo ausente ou nulo no ajuste fica como no grupo; texto vazio é troca legítima (apaga
+    o subtítulo, por exemplo).
+    """
+    if not ajuste:
+        return base
+    fora = set(ajuste) - set(CAMPOS_AJUSTAVEIS)
+    if fora:
+        raise ValueError(f"o ajuste só troca {', '.join(CAMPOS_AJUSTAVEIS)}; "
+                         f"recebeu {', '.join(sorted(fora))}")
+    trocas = {k: v for k, v in ajuste.items() if v is not None}
+    return gf.Cabecalho(**{**asdict(base), **trocas})
+
+
 def _montar_pdf(pedidos: list[tuple[str, int, dt.date | None]],
-                cabecalho: gf.Cabecalho, saida: str) -> dict:
+                cabecalho: gf.Cabecalho, saida: str,
+                ajustes: dict[str, dict] | None = None) -> dict:
     """Desenha uma folha por chave, confere, e repete as páginas em sequência.
 
+    `ajustes` (D35, fase 3): por chave, os campos do cabeçalho que aquele evento troca.
+
     A detecção completa, nas 5 resoluções de D10, roda na primeira folha de cada
-    carimbo, porque ele mora ao lado do marcador 1 e muda com o dia do evento.
-    Nas demais roda só a 200 dpi: a chave é escrita dentro da banda, longe dos
-    marcadores, e isso deixa o lote em segundos em vez de minutos.
+    combinação de (texto, carimbo): o carimbo mora ao lado do marcador 1 e muda com o dia
+    do evento, e o texto do topo divide a faixa com os marcadores de cima. Nas demais roda
+    só a 200 dpi: a chave é escrita dentro da banda, longe dos marcadores, e isso deixa o
+    lote em segundos em vez de minutos.
     """
-    # Todo portão antes da primeira folha: um dia que não passa não deixa sair
+    ajustes = ajustes or {}
+    textos = {chave: combinar(cabecalho, ajustes.get(chave)) for chave, _, _ in pedidos}
+    # Todo portão antes da primeira folha: um dia ou um texto que não passa não deixa sair
     # meio lote.
-    for carimbo in sorted({gf.texto_carimbo(dia) for _, _, dia in pedidos}):
-        conferir_cabecalho(cabecalho, carimbo=carimbo)
-    completos: set[str] = set()
+    conferidos: set[tuple] = set()
+    for chave, _, dia in pedidos:
+        par = (tuple(asdict(textos[chave]).items()), gf.texto_carimbo(dia))
+        if par not in conferidos:
+            conferir_cabecalho(textos[chave], carimbo=par[1])
+            conferidos.add(par)
+    completos: set[tuple] = set()
     with tempfile.TemporaryDirectory() as tmp:
         paginas: list[str] = []
         for i, (chave, folhas, dia) in enumerate(pedidos):
             carimbo = gf.texto_carimbo(dia)
             nome = f"{i:04d}.pdf"
             pdf = os.path.join(tmp, nome)
-            gf.gerar(pdf, chave, cabecalho, carimbo)
-            dpis = (200,) if carimbo in completos else (150, 200, 300, 400, 600)
-            completos.add(carimbo)
+            gf.gerar(pdf, chave, textos[chave], carimbo)
+            par = (tuple(asdict(textos[chave]).items()), carimbo)
+            dpis = (200,) if par in completos else (150, 200, 300, 400, 600)
+            completos.add(par)
             for dpi, ids in gf.conferir_deteccao(pdf, dpis).items():
                 if not set(ids) >= {0, 1, 2, 3}:
                     raise ValueError(f"a folha de {chave or 'chave em branco'} "
@@ -505,15 +536,15 @@ def _montar_pdf(pedidos: list[tuple[str, int, dt.date | None]],
 
 
 def gerar_pdf(itens: list[ItemLote], cabecalho: gf.Cabecalho, saida: str,
-              aceitar_alertas: bool = False) -> dict:
-    """O PDF de um lote vindo da planilha."""
+              aceitar_alertas: bool = False, ajustes: dict[str, dict] | None = None) -> dict:
+    """O PDF de um lote vindo da planilha (ou do pacote de um grupo, com `ajustes`)."""
     erros, alertas = validar_lote(itens)
     if erros:
         raise ValueError("; ".join(erros))
     if alertas and not aceitar_alertas:
         raise AlertasPendentes(alertas)
     return _montar_pdf([(i.chave, i.folhas, i.dia) for i in itens], cabecalho,
-                       saida)
+                       saida, ajustes)
 
 
 def gerar_avulsas(chave: str, folhas: int, cabecalho: gf.Cabecalho,

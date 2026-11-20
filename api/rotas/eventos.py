@@ -13,6 +13,7 @@ Por isso o cadastro é uma tela, e não um `INSERT` na mão: até 30/08 a tabela
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ..config import config
 from ..db import dependencia_sessao
-from ..esquemas import EventoEntrada, EventoSaida
+from ..esquemas import CabecalhoAjuste, EventoEntrada, EventoSaida
 from ..tabelas import Evento, Folha
 
 rotas = APIRouter(prefix="/eventos", tags=["eventos"])
@@ -66,8 +67,10 @@ def _com_contagem(db: Session, consulta) -> list[EventoSaida]:
 @rotas.post("", response_model=EventoSaida, status_code=201)
 def criar(dados: EventoEntrada,
           db: Session = Depends(dependencia_sessao)) -> EventoSaida:
+    from .grupos import garantir_grupo
     evento = Evento(**dados.model_dump())
     evento.chave = _validar_chave(dados.chave)
+    evento.grupo = garantir_grupo(db, dados.grupo)                 # D35
     db.add(evento)
     try:
         db.commit()
@@ -76,8 +79,8 @@ def criar(dados: EventoEntrada,
         # Chave repetida não é conflito de banco a explicar: são duas
         # ocorrências que o sistema não teria como distinguir, porque a folha
         # traz só a chave. Recusar é a única saída correta.
-        raise HTTPException(409, f"a chave {evento.chave} já é de outro "
-                                 f"evento") from erro
+        raise HTTPException(409, f"a chave {evento.chave} já é de outro evento em "
+                                 "andamento; encerre-o para liberar a chave") from erro
     db.refresh(evento)
     return EventoSaida.model_validate(evento).model_copy(update={"folhas_enviadas": 0})
 
@@ -85,6 +88,7 @@ def criar(dados: EventoEntrada,
 @rotas.get("", response_model=list[EventoSaida])
 def listar(situacao: str | None = Query(None),
            tipo: str | None = Query(None),
+           grupo: str | None = Query(None),
            db: Session = Depends(dependencia_sessao)) -> list[EventoSaida]:
     consulta = select(Evento).order_by(Evento.inicio.desc().nullslast(),
                                        Evento.id.desc())
@@ -92,6 +96,8 @@ def listar(situacao: str | None = Query(None),
         consulta = consulta.where(Evento.situacao == situacao)
     if tipo:
         consulta = consulta.where(Evento.tipo == tipo)
+    if grupo:
+        consulta = consulta.where(Evento.grupo == grupo)
     return _com_contagem(db, consulta)
 
 
@@ -118,10 +124,25 @@ def editar(evento_id: int, dados: EventoEntrada,
         # e a folha seguinte da mesma pilha não casaria mais.
         raise HTTPException(409, f"o evento já tem {len(evento.folhas)} "
                                  f"folha(s); a chave não pode mudar")
-    for campo, valor in dados.model_dump().items():
+    # D35: o grupo é resolvido ANTES de mexer nos campos. `garantir_grupo` consulta o banco, e
+    # o autoflush gravaria antes a chave nova: um conflito de chave estouraria fora do `try`
+    # abaixo e viraria 500 em vez de 409.
+    grupo = evento.grupo
+    # D24: o grupo só muda se vier no pedido — a tela manda o evento inteiro, e uma versão
+    # dela que ainda não conheça o campo apagaria o grupo a cada edição
+    if "grupo" in dados.model_fields_set:
+        from .grupos import garantir_grupo
+        grupo = garantir_grupo(db, dados.grupo)                    # D35: não fica sem grupo
+    for campo, valor in dados.model_dump(exclude={"grupo"}).items():
         setattr(evento, campo, valor)
+    evento.grupo = grupo
     evento.chave = nova
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as erro:
+        db.rollback()
+        raise HTTPException(409, f"a chave {nova} já é de outro evento em andamento; "
+                                 "encerre-o para liberar a chave") from erro
     return obter(evento_id, db)
 
 
@@ -139,9 +160,44 @@ def mudar_situacao(evento_id: int, situacao: str = Query(...),
     evento = db.get(Evento, evento_id)
     if evento is None:
         raise HTTPException(404, "evento não encontrado")
-    evento.situacao = situacao
+    mudar_situacoes(db, [evento], situacao)
     db.commit()
     return obter(evento_id, db)
+
+
+def mudar_situacoes(db: Session, eventos: list[Evento], situacao: str) -> int:
+    """Encerra ou reabre, todos ou nenhum (D33).
+
+    Encerrar libera a chave para outro evento usar. Reabrir é recusado se outro evento
+    aberto já estiver com a chave: os dois abertos seriam indistinguíveis pela folha.
+    Devolve quantas folhas da bandeja foram religadas ao reabrir (D34).
+    """
+    if situacao == "em andamento":
+        ids = {e.id for e in eventos}
+        chaves = {e.chave for e in eventos if e.situacao != "em andamento"}
+        donos = {e.chave: e for e in db.scalars(
+            select(Evento).where(Evento.chave.in_(chaves), Evento.situacao == "em andamento",
+                                 Evento.id.not_in(ids)))} if chaves else {}
+        if donos:
+            exemplos = "; ".join(f"{c} (agora de \"{e.nome}\")"
+                                 for c, e in sorted(donos.items())[:5])
+            raise HTTPException(
+                409, f"{len(donos)} chave(s) já estão com outro evento em andamento: "
+                     f"{exemplos}. Encerre aquele evento antes de reabrir este.")
+    agora = datetime.now(timezone.utc)
+    reabertas = set()
+    for e in eventos:
+        if e.situacao != situacao:
+            e.situacao = situacao
+            e.encerrado_em = agora if situacao == "encerrado" else None
+            if situacao == "em andamento":
+                reabertas.add(e.chave)
+    if not reabertas:
+        return 0
+    # D34: reabrir desfaz o encerramento, inclusive para o que chegou nesse meio-tempo
+    from .folhas import religar_bandeja
+    db.flush()
+    return religar_bandeja(db, reabertas)
 
 
 @rotas.delete("/{evento_id}", status_code=204)
@@ -157,3 +213,29 @@ def apagar(evento_id: int, db: Session = Depends(dependencia_sessao)) -> None:
                                  f"encerre em vez de apagar")
     db.delete(evento)
     db.commit()
+
+
+
+@rotas.put("/{evento_id}/ajuste", response_model=EventoSaida)
+def ajustar_cabecalho(evento_id: int, dados: CabecalhoAjuste,
+                      db: Session = Depends(dependencia_sessao)) -> EventoSaida:
+    """O que este evento troca no modelo da folha do grupo (D35, fase 3). Tudo nulo tira o
+    ajuste. Passa pelo portão da folha (D16) já combinado com o modelo do grupo."""
+    from .grupos import modelo_do_grupo
+    from .impressao import _lote
+    from ..tabelas import Grupo
+    evento = db.get(Evento, evento_id)
+    if evento is None:
+        raise HTTPException(404, "evento não encontrado")
+    ajuste = dados.model_dump(exclude_none=True)
+    if ajuste:
+        lf = _lote()
+        grupo = db.scalar(select(Grupo).where(Grupo.nome == evento.grupo))
+        base = modelo_do_grupo(lf, grupo) if grupo else lf.carregar_cabecalho()
+        try:
+            lf.conferir_cabecalho(lf.combinar(base, ajuste))
+        except ValueError as erro:
+            raise HTTPException(422, str(erro)) from erro
+    evento.cabecalho_ajuste = ajuste or None
+    db.commit()
+    return obter(evento_id, db)

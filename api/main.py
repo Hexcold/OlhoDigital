@@ -8,6 +8,7 @@ graça, em vez de um exemplo de JSON colado no texto.
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -15,8 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import pipeline
 from .db import criar_tabelas
-from .rotas import (cadastro_chaves, eventos, folhas, impressao, linhas, participantes,
-                    sessao)
+from .rotas import (cadastro_chaves, eventos, folhas, grupos, impressao, linhas,
+                    participantes, sessao)
 
 log = logging.getLogger("olhodigital")
 
@@ -45,6 +46,20 @@ async def ciclo(app: FastAPI):
     except Exception as e:                                  # noqa: BLE001
         log.warning("pipeline indisponível (%s: %s) — upload aceita, "
                     "processamento falha", type(e).__name__, e)
+
+    # A fila de leitura vive na memória: o que um reinício interrompeu volta a ser lido. Numa
+    # thread, para o servidor já atender a tela enquanto lê; a reivindicação atômica em
+    # `_ler_e_gravar` impede que esta thread e um envio novo leiam a mesma folha.
+    try:
+        from .db import sessao
+        with sessao() as db:
+            pendentes = folhas.retomar_fila(db)
+        if pendentes:
+            log.info("retomando a leitura de %s folha(s) interrompida(s)", len(pendentes))
+            threading.Thread(target=folhas.ler_em_sequencia, args=(pendentes,),
+                             name="retomar-fila", daemon=True).start()
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("não deu para retomar a fila (%s: %s)", type(e).__name__, e)
     yield
 
 
@@ -66,6 +81,7 @@ app.add_middleware(
 
 app.include_router(eventos.rotas)
 app.include_router(folhas.rotas)
+app.include_router(grupos.rotas)
 app.include_router(impressao.rotas)
 app.include_router(cadastro_chaves.rotas)
 app.include_router(sessao.rotas)

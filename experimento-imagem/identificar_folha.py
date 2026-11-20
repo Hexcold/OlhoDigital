@@ -167,6 +167,14 @@ ABSTENCAO = "?"
 # matrícula ou só um nome curto.
 MINIMO_OCUPACAO = 3
 
+# D27: a assinatura da tinta que vaza da linha de cima, em fração da altura da célula
+# (depois do `cut_borders(2)`). Medido em 20/11/2026 nas 59 folhas do banco: as células
+# da linha vazia invadida começam em 0,00 e terminam entre 0,22 e 0,28; nenhuma das 797
+# linhas com pessoa identificada vira linha em branco com o fundo em qualquer valor de 0,30
+# a 0,50. O 0,40 é o meio desse platô, não a borda.
+TOPO_VAZAMENTO = 0.05
+FUNDO_VAZAMENTO = 0.40
+
 
 @dataclass
 class Celula:
@@ -174,6 +182,9 @@ class Celula:
     caractere: str | None   # None = não houve caractere para emitir
     confianca: float
     motivo: str             # 'lido' | 'vazia' | 'sem_caixa'
+    # D27: toda a tinta encosta no topo e para na faixa de cima — é a perna da letra da
+    # linha de CIMA invadindo a célula. Só `Linha.em_branco` olha isto; a leitura não muda.
+    so_topo: bool = False
 
 
 @dataclass
@@ -257,8 +268,22 @@ class Linha:
 
         A regra olha os CAMPOS separadamente, e não o total, para não descartar
         quem preencheu só um deles — matrícula sem nome, ou um nome muito curto.
+
+        Conta só célula LIDA (ou anulada), não `sem_caixa`. No recorte v3 o
+        `sem_caixa` é a célula em que o filtro do v0 viu tinta e a limpeza do v3
+        não achou caractere: resíduo de grade. Contá-lo mandava linha vazia para
+        a quarentena com o nome `?????` e a matrícula `??????`. Medido em
+        20/11/2026 nas 865 linhas do banco (D26): a regra nova tira 20, todas em
+        quarentena, nenhuma revisada, todas com 0 célula lida nos dois campos.
+        A regra do D22 (`matricula_completa`) segue contando `sem_caixa` como
+        tinta — lá o lado conservador é o contrário.
+
+        Também não conta célula `so_topo` (D27): a perna da letra da linha de cima
+        que invade a célula é LIDA, com confiança alta (0,99 num caso medido), e
+        três delas faziam uma linha vazia existir com a matrícula `5??4?1`.
         """
-        uteis = lambda cs: sum(c.motivo != "vazia" for c in cs)
+        uteis = lambda cs: sum(c.motivo in ("lido", "anulada") and not c.so_topo
+                               for c in cs)
         return (uteis(self.celulas) < MINIMO_OCUPACAO
                 and uteis(self.celulas_nome) < MINIMO_OCUPACAO)
 
@@ -360,7 +385,7 @@ def _reconhecer(celulas: list[Image], ocr: OCR, cinza=None,
     Experimento 03 — então o conjunto de linhas não muda com o recorte.
     """
     saida: list[Celula | None] = []
-    pendentes, posicoes = [], []
+    pendentes, posicoes, topos = [], [], []
 
     for i, celula in enumerate(celulas):
         img = celula.binarize(gaussian=False).inversion().cut_borders(2)
@@ -376,6 +401,13 @@ def _reconhecer(celulas: list[Image], ocr: OCR, cinza=None,
             saida.append(Celula(None, 0.0, "vazia"))
             continue
 
+        # medido no filtro de SEMPRE, o mesmo que decide vazia: é ele que diz onde há
+        # tinta, e o V3 abaixo só muda o que vai para o classificador
+        altura = img.get_h_w()[0]
+        topos.append(min(r.y_min for r in filtrada.regions) <= TOPO_VAZAMENTO * altura
+                     and max(r.y_max for r in filtrada.regions) + 1
+                     <= FUNDO_VAZAMENTO * altura)
+
         if cinza is not None:
             filtrada = recorte_celula.filtrar(*recorte_celula.limpar(cinza, caixas[i]))
 
@@ -383,9 +415,9 @@ def _reconhecer(celulas: list[Image], ocr: OCR, cinza=None,
         pendentes.append(filtrada)
         posicoes.append(i)
 
-    for pos, pred in zip(posicoes, ocr.prever_lote(pendentes)):
-        saida[pos] = (Celula(None, 0.0, "sem_caixa") if pred is None
-                      else Celula(pred.caractere, pred.confianca, "lido"))
+    for pos, so_topo, pred in zip(posicoes, topos, ocr.prever_lote(pendentes)):
+        saida[pos] = (Celula(None, 0.0, "sem_caixa", so_topo) if pred is None
+                      else Celula(pred.caractere, pred.confianca, "lido", so_topo))
 
     # falhar alto: filtrar os None encolheria a linha em silêncio e desalinharia
     # a leitura com as posições da grade.
