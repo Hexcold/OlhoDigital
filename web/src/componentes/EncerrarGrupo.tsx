@@ -82,8 +82,8 @@ export function EncerrarGrupo({
             Encerrar os <strong>{info.eventos}</strong> eventos de <strong>{nome}</strong> libera
             as chaves para outro grupo ou evento. Folhas novas com essas chaves deixam de vir para
             cá. Nada é apagado, e dá para reabrir.
-            {info.folhas - info.folhas_revisadas > 0 &&
-              ` ${info.folhas - info.folhas_revisadas} folha(s) ainda não foram concluídas na revisão.`}
+            {(info.a_concluir ?? 0) > 0 &&
+              ` ${info.a_concluir} folha(s) ainda não foram concluídas na revisão.`}
           </p>
           <label className="mt-2 block">
             Para confirmar, digite o nome do grupo: <strong>{nome}</strong>

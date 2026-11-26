@@ -121,6 +121,14 @@ async def _recusar(send, codigo: int, mensagem: str) -> None:
     await send({"type": "http.response.body", "body": corpo})
 
 
+def usuario_logado(request) -> str | None:
+    """Quem fez o pedido, segundo o cookie que `ExigeLogin` conferiu. None sem login.
+
+    Sem login é o `api.main:app` de desenvolvimento, em que o middleware não roda.
+    """
+    return getattr(request.state, "usuario", None)
+
+
 class ExigeLogin:
     def __init__(self, aplicacao) -> None:
         self.aplicacao = aplicacao

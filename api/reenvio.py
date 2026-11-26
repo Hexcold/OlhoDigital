@@ -14,6 +14,8 @@ a mesma pessoa na linha 1 de dois eventos é legítimo.
 **Qual cópia vale:** uma folha marcada com `copia_de` não conta (frequência e quarentena do
 grupo a ignoram). Na detecção, vale a que tem mais aceites, a não ser que a outra já tenha
 trabalho humano (revisão ou carimbo de concluída): trabalho de gente não troca de lado sozinho.
+Antes dos dois, desde 22/11, vale a lida com a base de pessoas que o grupo usa HOJE: depois de
+trocar a base, a leitura antiga tinha mais aceites (a base maior) e voltava a valer sozinha.
 Quem revisa pode trocar ("usar esta") ou desfazer ("não é cópia"). Nada é apagado.
 """
 from __future__ import annotations
@@ -21,7 +23,7 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from . import pipeline
+from . import bases, pipeline
 from .esquemas import REVISOR_AUTOMATICO
 from .tabelas import Folha, Linha, Revisao
 
@@ -67,6 +69,15 @@ def tem_trabalho_humano(db: Session, folha: Folha) -> bool:
         .limit(1)) is not None
 
 
+def _base_em_dia(db: Session, folha: Folha) -> bool:
+    """Lida com a base que o grupo da folha usa hoje (`api/bases.py`)."""
+    base, lista = bases.para_identificar(db, bases.grupo_da_folha(db, folha))
+    # sem base registrada, a regra de `bases.base_da_folha`: a que valeria hoje; a lista
+    # (A66) também tem de ser a de hoje
+    return (base is not None and bases.base_da_folha(db, folha) == base.id
+            and folha.lista_id == (lista.id if lista else None))
+
+
 def soltar(db: Session, folha: Folha) -> None:
     """Desfaz as relações de cópia em que a folha está, antes de ela ser relida, religada a
     outro evento ou apagada. Se ela era a que valia, a melhor das cópias passa a valer."""
@@ -74,7 +85,8 @@ def soltar(db: Session, folha: Folha) -> None:
     copias = list(db.scalars(select(Folha).where(Folha.copia_de == folha.id)))
     if not copias:
         return
-    nova = max(copias, key=lambda f: (tem_trabalho_humano(db, f), _aceites(db, f.id), -f.id))
+    nova = max(copias, key=lambda f: (_base_em_dia(db, f), tem_trabalho_humano(db, f),
+                                      _aceites(db, f.id), -f.id))
     nova.copia_de = nova.semelhanca_copia = None
     for c in copias:
         if c is not nova:
@@ -101,8 +113,12 @@ def detectar(db: Session, folha: Folha) -> Folha | None:
     if melhor is None:
         return None
 
-    # vale a de mais aceites, a não ser que a outra já tenha trabalho de gente
-    if (not tem_trabalho_humano(db, melhor)
+    # vale a lida com a base de hoje; empatando nisso, a de mais aceites, a não ser que a
+    # outra já tenha trabalho de gente
+    em_dia, outra_em_dia = _base_em_dia(db, folha), _base_em_dia(db, melhor)
+    if em_dia != outra_em_dia:
+        vale, copia = (folha, melhor) if em_dia else (melhor, folha)
+    elif (not tem_trabalho_humano(db, melhor)
             and _aceites(db, folha.id) > _aceites(db, melhor.id)):
         vale, copia = folha, melhor
     else:

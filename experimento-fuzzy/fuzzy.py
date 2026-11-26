@@ -47,6 +47,10 @@ DELTA = 0.08
 # A regra dos dois canais (A57): aceite exige a matrícula exata OU o nome do campeão ≥ τ. Barra o
 # impostor de fora da base cuja matrícula cai a um dígito de alguém de dentro e cujo nome casa mal.
 TAU_NOME = 0.65
+# D37: o nome tem que apontar para o campeão, e não para a base em geral (A67). Aceite exige que no
+# máximo esta fração da base case com o nome lido tão bem quanto o campeão. É a chance de um nome
+# qualquer passar, e não um ponto de similaridade: por isso um 5% convencional, sem calibrar.
+CORTE_ACASO = 0.05
 
 
 def dist_levenshtein(s1: str, s2: str) -> int:
@@ -113,11 +117,26 @@ SIM_NOME = {
 }
 
 
+def fracao_nome(nome_lido: str, campeao: dict, base: list[dict], sim_nome) -> float:
+    """Que fração do RESTO da base casa com o nome lido tão bem quanto o campeão (D37).
+
+    Um piso de similaridade não serve: um nome mal lido da pessoa certa pontua como um apelido
+    (0,455 contra 0,424, A67), e duas letras soltas pontuam 1,0 porque cabem em qualquer sobrenome.
+    Comparar com a base resolve os dois: o nome mal lido ainda prefere a pessoa certa, o apelido
+    e as duas letras não preferem ninguém.
+    """
+    do_campeao = sim_nome(nome_lido, campeao["nome"])
+    iguais = sum(sim_nome(nome_lido, a["nome"]) >= do_campeao - 1e-9
+                 for a in base if a["matricula"] != campeao["matricula"])
+    return iguais / len(base)
+
+
 def identificar(matricula_lida: str, nome_lido: str, base: list[dict],
                 alpha: float = ALPHA, theta: float = THETA,
                 delta: float = DELTA, sim_nome=None,
                 matricula_completa: bool = True,
-                tau_nome: float | None = None) -> dict:
+                tau_nome: float | None = None,
+                corte_acaso: float | None = None) -> dict:
     """Compara a leitura contra todos os candidatos da base.
 
     Score composto: alpha*sim_matricula + (1-alpha)*sim_nome.
@@ -132,6 +151,10 @@ def identificar(matricula_lida: str, nome_lido: str, base: list[dict],
     matrícula exata ou o nome dele ≥ τ. Fica desligada por padrão porque a
     simulação do TCC 1 (`experimento.py`, `exp2_protocolo.py`) chama esta função
     com os padrões; quem aplica a regra é o gate do pipeline, com `TAU_NOME`.
+
+    `corte_acaso` liga a regra do D37: o nome lido não pode casar com mais que essa fração da
+    base tão bem quanto com o campeão (`fracao_nome`). Vale MESMO com a matrícula exata.
+    Desligada por padrão pelo mesmo motivo.
 
     `sim_nome` recebe uma entrada de `SIM_NOME`, que já traz a semântica do '?'
     junto. Passar uma métrica crua do rapidfuzz aqui é o descasamento que A24
@@ -164,6 +187,8 @@ def identificar(matricula_lida: str, nome_lido: str, base: list[dict],
                    or sim_nome(nome_lido, melhor["nome"]) >= tau_nome)
     aceito = (melhor_score >= theta and margem >= delta and matricula_completa
               and dois_canais)
+    if aceito and corte_acaso is not None:
+        aceito = fracao_nome(nome_lido, melhor, base, sim_nome) <= corte_acaso
     return {"aluno": melhor, "score": melhor_score,
             "margem": margem, "decisao": "aceito" if aceito else "quarentena"}
 

@@ -16,8 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import pipeline
 from .db import criar_tabelas
-from .rotas import (cadastro_chaves, eventos, folhas, grupos, impressao, linhas,
-                    participantes, sessao)
+from .rotas import (bases as rotas_bases, cadastro_chaves, eventos, folhas, grupos, impressao,
+                    linhas, participantes, sessao)
 
 log = logging.getLogger("olhodigital")
 
@@ -41,6 +41,18 @@ async def ciclo(app: FastAPI):
                     "que toca o banco vai falhar. Ver api/README.md",
                     type(e).__name__, e)
     try:
+        from . import bases
+        from .db import sessao
+        with sessao() as db:
+            semeada = bases.semear(db)
+        if semeada:
+            log.info("sem base de pessoas: a planilha do repositório virou a base geral "
+                     "(%s pessoas)", semeada.pessoas)
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("não deu para criar a base geral (%s: %s) — envie a lista de "
+                    "matriculados na tela inicial; até lá, a leitura falha com aviso",
+                    type(e).__name__, e)
+    try:
         pipeline.carregar_recursos()
         log.info("base e classificadores carregados")
     except Exception as e:                                  # noqa: BLE001
@@ -48,15 +60,15 @@ async def ciclo(app: FastAPI):
                     "processamento falha", type(e).__name__, e)
 
     # A fila de leitura vive na memória: o que um reinício interrompeu volta a ser lido. Numa
-    # thread, para o servidor já atender a tela enquanto lê; a reivindicação atômica em
-    # `_ler_e_gravar` impede que esta thread e um envio novo leiam a mesma folha.
+    # thread, para o servidor já atender a tela enquanto lê. É o mesmo leitor único dos envios
+    # (`ler_fila`): um envio que chegar durante a retomada não abre um segundo leitor.
     try:
         from .db import sessao
         with sessao() as db:
             pendentes = folhas.retomar_fila(db)
         if pendentes:
             log.info("retomando a leitura de %s folha(s) interrompida(s)", len(pendentes))
-            threading.Thread(target=folhas.ler_em_sequencia, args=(pendentes,),
+            threading.Thread(target=folhas.ler_fila,
                              name="retomar-fila", daemon=True).start()
     except Exception as e:                                  # noqa: BLE001
         log.warning("não deu para retomar a fila (%s: %s)", type(e).__name__, e)
@@ -87,6 +99,7 @@ app.include_router(cadastro_chaves.rotas)
 app.include_router(sessao.rotas)
 app.include_router(linhas.rotas)
 app.include_router(participantes.rotas)
+app.include_router(rotas_bases.rotas)
 
 
 @app.get("/modelos-folha", tags=["serviço"])

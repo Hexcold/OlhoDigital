@@ -390,7 +390,8 @@ def validar_chave(chave: str) -> str:
     # Confere ANTES de `upper()`, que transforma ß em SS e ﬁ em FI: a chave impressa
     # deixaria de ser a que foi digitada.
     if not chave.isascii() or not chave.isalpha():
-        raise ValueError(f"chave {chave!r}: só A-Z (D14)")
+        # D14. O código da decisão fica aqui, não na mensagem: ela aparece para quem usa (A63)
+        raise ValueError(f"chave {chave!r}: só A-Z, sem número, acento ou símbolo")
     chave = chave.upper()
     if len(chave) > CELULAS_CHAVE:
         raise ValueError(f"chave {chave!r}: {len(chave)} letras, "

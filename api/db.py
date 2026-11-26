@@ -52,7 +52,8 @@ def criar_tabelas() -> None:
         for coluna, tipo in (("chave_lida", "VARCHAR(16)"),
                              ("origem_vinculo", "VARCHAR(20)"),
                              ("tau_nome", "DOUBLE PRECISION"),
-                             ("recorte", "VARCHAR(10)")):
+                             ("recorte", "VARCHAR(10)"),
+                             ("corte_acaso", "DOUBLE PRECISION")):
             conexao.execute(text(f"ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
                                  f"{coluna} {tipo}"))
         # D24: o grupo de eventos, com o índice que `index=True` só cria em tabela nova
@@ -65,6 +66,17 @@ def criar_tabelas() -> None:
                              "saiu_na_carga INTEGER REFERENCES carga_base (id)"))
         conexao.execute(text("ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
                              "carga_base_id INTEGER REFERENCES carga_base (id)"))
+        # 22/11: com qual base de pessoas a folha foi identificada
+        conexao.execute(text("ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
+                             "base_id INTEGER REFERENCES base_pessoas (id)"))
+        # A66: a lista do grupo filtra quem sai aceito; a geral continua identificando
+        conexao.execute(text("ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
+                             "lista_id INTEGER REFERENCES base_pessoas (id)"))
+        conexao.execute(text("ALTER TABLE linha ADD COLUMN IF NOT EXISTS "
+                             "fora_da_lista BOOLEAN NOT NULL DEFAULT FALSE"))
+        # D37: a regra do nome que aponta para a pessoa
+        conexao.execute(text("ALTER TABLE linha ADD COLUMN IF NOT EXISTS "
+                             "nome_nao_confirma BOOLEAN NOT NULL DEFAULT FALSE"))
         # A61: a folha reescaneada
         conexao.execute(text("ALTER TABLE folha ADD COLUMN IF NOT EXISTS "
                              "reescaneada_em TIMESTAMP"))
@@ -94,7 +106,7 @@ def criar_tabelas() -> None:
             if conexao.execute(text("SELECT count(*) FROM evento WHERE grupo IS NULL")).scalar():
                 conexao.execute(text("INSERT INTO grupo (nome, descricao) VALUES "
                                      "('Eventos avulsos', 'eventos que não tinham grupo quando "
-                                     "o grupo passou a ser obrigatório (D35)') "
+                                     "o grupo passou a ser obrigatório') "
                                      "ON CONFLICT (nome) DO NOTHING"))
                 conexao.execute(text("UPDATE evento SET grupo = 'Eventos avulsos' "
                                      "WHERE grupo IS NULL"))

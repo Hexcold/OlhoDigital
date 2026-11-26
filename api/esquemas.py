@@ -127,6 +127,7 @@ class FolhaSaida(BaseModel):
     # D23: a regra dos dois canais e o recorte da célula; nulos em folha lida antes deles
     tau_nome: float | None = None
     recorte: str | None = None
+    corte_acaso: float | None = None                       # D37
     criado_em: datetime
     processada_em: datetime | None
     # carimbo de revisão concluída — ver `tabelas.Folha`
@@ -158,6 +159,8 @@ class Candidato(BaseModel):
     nome: str
     curso: str | None = None
     score: float
+    # A66: com lista de grupo, se o candidato está nela; None sem lista
+    na_lista: bool | None = None
 
 
 # D26: quem grava o "não identificado" padrão da linha sem matrícula. É um nome de
@@ -180,7 +183,8 @@ def sem_matricula(motivos_matricula: list | None) -> bool:
 
 def motivo_rejeicao(score: float, margem: float, theta: float,
                     delta: float, motivos_matricula: list | None = None,
-                    tau_nome: float | None = None) -> str:
+                    tau_nome: float | None = None, fora_da_lista: bool = False,
+                    nome_nao_confirma: bool = False) -> str:
     """Por que a linha caiu. As causas pedem atenção diferente.
 
     θ e δ caçam espécies diferentes de erro (D03): θ é o impostor confiante, δ
@@ -203,6 +207,9 @@ def motivo_rejeicao(score: float, margem: float, theta: float,
     if vazias:
         return (f"matrícula incompleta: {vazias} de {len(motivos_matricula)} "
                 "células em branco")
+    if fora_da_lista:
+        # o gate passou; quem barrou foi a lista (A66)
+        return "a pessoa reconhecida não está na lista do grupo"
     baixo, apertado = score < theta, margem < delta
     if baixo and apertado:
         return "score baixo e margem apertada"
@@ -210,6 +217,9 @@ def motivo_rejeicao(score: float, margem: float, theta: float,
         return f"score {score:.3f} abaixo de θ={theta:g}"
     if apertado:
         return f"margem {margem:.3f} abaixo de δ={delta:g}"
+    if nome_nao_confirma:
+        # D37: antes do τ, que é o motivo que sobra quando nada mais explica
+        return "o nome lido não confirma a pessoa sugerida: casa igual ou melhor com muita gente da base"
     if tau_nome is not None:
         return f"matrícula não é exata e o nome não a confirma (dois canais, τ={tau_nome:g})"
     return ""
@@ -242,7 +252,11 @@ def montar_linha(linha, vizinhos: list[str], theta: float,
                                 else motivo_rejeicao(linha.score, linha.margem,
                                                      theta, delta,
                                                      linha.motivos_matricula,
-                                                     tau_nome))
+                                                     tau_nome,
+                                                     bool(getattr(linha, "fora_da_lista",
+                                                                  False)),
+                                                     bool(getattr(linha, "nome_nao_confirma",
+                                                                  False))))
     dados["revisao"] = ultima_revisao(linha)
     return dados
 
@@ -376,6 +390,8 @@ class LinhaSaida(BaseModel):
     matricula_sugerida: str | None
     candidatos: list[Candidato]
     duplicada_na_folha: bool
+    fora_da_lista: bool = False
+    nome_nao_confirma: bool = False
 
     # derivados, não colunas — ver `montar_linha`
     vizinhos: list[str] = []
@@ -399,6 +415,7 @@ class ParticipanteSaida(BaseModel):
     matricula: str
     nome: str
     curso: str | None
+    na_lista: bool | None = None          # A66: com lista de grupo, se a pessoa está nela
 
 
 class CabecalhoFolha(BaseModel):
@@ -565,6 +582,8 @@ class GrupoSaida(BaseModel):
     # quantos papéis foram escaneados uma vez só, e quantos têm cópia guardada
     copias: int = 0
     leitura_unica: int = 0
+    # folhas que contam e ainda não tiveram a revisão concluída
+    a_concluir: int = 0
     com_copia: int = 0
 
 

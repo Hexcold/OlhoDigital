@@ -76,6 +76,15 @@ class EnvioPeloGrupo(ComBanco):
         self.assertEqual(ids, {sem.id, com.id})
         self.assertNotIn(de_b.id, ids)
 
+    def test_reenviar_o_mesmo_arquivo_responde_200_e_nao_duplica(self):
+        # 22/11: o reenvio voltava 201, igual a um envio novo, e a tela não dizia nada
+        arquivo = {"arquivo": ("f.png", b"\x89PNG mesma folha", "image/png")}
+        with mock.patch.object(folhas, "_ler_e_gravar"):
+            primeiro = self.cliente.post("/folhas", files=arquivo)
+            segundo = self.cliente.post("/folhas", files=arquivo)
+        self.assertEqual((primeiro.status_code, segundo.status_code), (201, 200))
+        self.assertEqual([f["id"] for f in segundo.json()], [f["id"] for f in primeiro.json()])
+
     def test_enviar_guarda_o_grupo(self):
         with mock.patch.object(folhas, "_ler_e_gravar"):
             r = self.cliente.post("/folhas", data={"grupo": "A"},

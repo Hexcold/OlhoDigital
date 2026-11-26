@@ -18,8 +18,10 @@ import type {
   PacoteAberto,
   Participante,
   PreviaApagar,
+  PreviaBase,
   ResumoRevisao,
   Sessao,
+  SituacaoBase,
   SugestaoEventos,
   TipoEvento,
 } from "./tipos";
@@ -91,6 +93,14 @@ async function pedirArquivo(caminho: string, init?: RequestInit): Promise<Blob> 
 
 const JSON_CORPO = { "Content-Type": "application/json" };
 
+function corpoBase(arquivo: File, grupo?: string, data?: string): FormData {
+  const corpo = new FormData();
+  corpo.append("arquivo", arquivo);
+  if (grupo) corpo.append("grupo", grupo);
+  if (data) corpo.append("data", data);
+  return corpo;
+}
+
 export const api = {
   saude: () => pedir<Record<string, string>>("/saude"),
 
@@ -152,7 +162,8 @@ export const api = {
     aoProgresso: (fracao: number) => void,
     grupo?: string,
   ) =>
-    new Promise<Folha[]>((resolve, reject) => {
+    // `jaEnviado`: o servidor responde 200 (e não 201) quando o arquivo já estava lá
+    new Promise<{ folhas: Folha[]; jaEnviado: boolean }>((resolve, reject) => {
       const corpo = new FormData();
       corpo.append("arquivo", arquivo);
       // D35, fase 5: pela aba do grupo, a chave casa só com os eventos dele
@@ -166,7 +177,7 @@ export const api = {
       xhr.onerror = () => reject(new ErroApi(0, "sem conexão com o servidor"));
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText) as Folha[]);
+          resolve({ folhas: JSON.parse(xhr.responseText) as Folha[], jaEnviado: xhr.status === 200 });
           return;
         }
         if (xhr.status === 401 && window.location.pathname !== "/login") {
@@ -230,8 +241,34 @@ export const api = {
       }),
     }),
 
-  buscarParticipantes: (q: string) =>
-    pedir<Participante[]>(`/participantes?q=${encodeURIComponent(q)}`),
+  /** Na base com que a folha DESTA linha foi lida (a do grupo, ou a geral). */
+  buscarParticipantes: (q: string, linha?: number) =>
+    pedir<Participante[]>(
+      `/participantes?q=${encodeURIComponent(q)}` + (linha !== undefined ? `&linha=${linha}` : ""),
+    ),
+
+  // --- bases de pessoas: a geral e a de cada grupo (22/11) ---
+  situacaoBase: (grupo?: string) =>
+    pedir<SituacaoBase>(`/bases${grupo ? `?grupo=${encodeURIComponent(grupo)}` : ""}`),
+
+  previaBase: (arquivo: File, grupo?: string, data?: string) =>
+    pedir<PreviaBase>("/bases/previa", { method: "POST", body: corpoBase(arquivo, grupo, data) }),
+
+  enviarBase: (arquivo: File, grupo?: string, data?: string) =>
+    pedir<SituacaoBase>("/bases", { method: "POST", body: corpoBase(arquivo, grupo, data) }),
+
+  urlPlanilhaBase: (id: number) => `/api/bases/${id}/planilha.xlsx`,
+
+  apagarBase: (id: number) =>
+    pedir<SituacaoBase & { resultado: "guardada" | "apagada" }>(`/bases/${id}`, {
+      method: "DELETE",
+    }),
+
+  relerComABase: (grupo: string | undefined, forcar: boolean) =>
+    pedir<SituacaoBase & { relidas: number }>(
+      `/bases/reler?forcar=${forcar}` + (grupo ? `&grupo=${encodeURIComponent(grupo)}` : ""),
+      { method: "POST" },
+    ),
 
   resumo: (folhaId: number) =>
     pedir<ResumoRevisao>(`/folhas/${folhaId}/resumo`),
@@ -367,6 +404,13 @@ export const api = {
   /** Lê a folha de novo, opcionalmente com outra geometria. Descarta as linhas
    *  — e com elas as decisões humanas —, por isso `forcar` quando já houver
    *  revisão. */
+  /** Devolve à fila as folhas em erro, do grupo ou todas (A63). */
+  relerErros: (grupo?: string) =>
+    pedir<{ relidas: number }>(
+      `/folhas/reler-erros${grupo ? `?grupo=${encodeURIComponent(grupo)}` : ""}`,
+      { method: "POST" },
+    ),
+
   reprocessar: (folhaId: number, modeloFolha?: string, forcar = false) => {
     const q = new URLSearchParams();
     if (modeloFolha) q.set("modelo_folha", modeloFolha);

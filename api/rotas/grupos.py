@@ -13,13 +13,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
+from .. import bases
 from ..db import dependencia_sessao
 from ..esquemas import (GrupoEntrada, GrupoSaida, ModeloGrupoEntrada, ModeloGrupoSaida, LinhaDoGrupo, PedidoApagarFolhas, PedidoGrupo,
                         PreviaApagar, ultima_revisao)
-from ..tabelas import Evento, Folha, Grupo, Linha, Participante, Revisao
+from ..tabelas import BaseDePessoas, Evento, Folha, Grupo, Linha, PessoaDaBase, Revisao
 from .folhas import (apagar_em_massa, para_revisao, registro_da_folha,
                      selecionar_para_apagar)
 
@@ -73,7 +74,17 @@ def _folhas_em_ordem(evento: Evento) -> list[Folha]:
 
 def linhas_da_frequencia(db: Session, nome: str) -> list[dict]:
     """A frequência do grupo, uma linha por assinatura lida, na ordem evento → folha → linha."""
-    pessoas = {p.matricula: p for p in db.scalars(select(Participante))}
+    # O nome e o curso vêm da base com que CADA folha foi lida (22/11): trocar a base do grupo
+    # depois não reescreve a frequência de quem já foi lido, e uma base retirada fica no banco
+    # enquanto alguma folha apontar para ela.
+    pessoas: dict[tuple[int | None, str], PessoaDaBase] = {}
+    ids_de: dict[int, list[int]] = {}
+    for ev in _eventos_do_grupo(db, nome):
+        for folha in _folhas_em_ordem(ev):
+            ids_de[folha.id] = bases.ids_da_folha(db, folha)
+    for p in db.scalars(select(PessoaDaBase).where(
+            PessoaDaBase.base_id.in_({b for ids in ids_de.values() for b in ids}))):
+        pessoas[(p.base_id, p.matricula)] = p
     saida = []
     for ev in _eventos_do_grupo(db, nome):
         for folha in _folhas_em_ordem(ev):
@@ -82,7 +93,13 @@ def linhas_da_frequencia(db: Session, nome: str) -> list[dict]:
             for linha in linhas:
                 ultima = ultima_revisao(linha)
                 situacao, mat = situacao_da_linha(linha.decisao, linha.matricula_sugerida, ultima)
-                pessoa = pessoas.get(mat) if mat else None
+                pessoa = next((pessoas[(i, mat)] for i in ids_de[folha.id]
+                               if (i, mat) in pessoas), None) if mat else None
+                # A66: a revisão pode aceitar quem não está na lista; a planilha diz isso
+                lista = bases.lista_da_folha(db, folha)
+                if (lista is not None and mat and situacao == "presente (revisado)"
+                        and mat not in lista):
+                    situacao = "presente (fora da lista)"
                 # D32: quem não está na base vem com o nome que a revisão conferiu
                 nome_fora = (ultima.nome_informado
                              if ultima is not None and ultima.matricula_informada else None)
@@ -133,10 +150,23 @@ def _resumos(db: Session, nomes: list[str] | None = None) -> list[dict]:
         .where(Evento.grupo.is_not(None)).group_by(Evento.grupo))}
     # D30: cópias e leituras únicas; D31: o que está na fila — numa passada só
     por_grupo: dict[str, list[tuple[int, int | None, str]]] = {}
-    for grupo, fid, copia_de, estado in db.execute(
-            select(Evento.grupo, Folha.id, Folha.copia_de, Folha.estado)
+    a_concluir: dict[str, int] = {}
+    for grupo, fid, copia_de, estado, revisada_em in db.execute(
+            select(Evento.grupo, Folha.id, Folha.copia_de, Folha.estado, Folha.revisada_em)
             .join(Folha, Folha.evento_id == Evento.id).where(Evento.grupo.is_not(None))):
         por_grupo.setdefault(grupo, []).append((fid, copia_de, estado))
+        # só as que contam: a cópia não se revisa (D30), e o aviso de encerrar dizia "124
+        # folhas sem concluir" num grupo de 62 papéis (22/11)
+        if copia_de is None and revisada_em is None:
+            a_concluir[grupo] = a_concluir.get(grupo, 0) + 1
+    # As enviadas pela aba do grupo que ainda não têm evento: na fila, em erro ou na bandeja.
+    # Ficam fora das contagens (não são do grupo até a chave casar), mas mudam a etapa: sem
+    # elas, as 62 folhas de um lote passavam a leitura inteira em "preparando" (22/11).
+    sem_evento: dict[str, list[str]] = {}
+    for grupo, estado in db.execute(select(Folha.grupo_envio, Folha.estado)
+                                    .where(Folha.evento_id.is_(None),
+                                           Folha.grupo_envio.is_not(None))):
+        sem_evento.setdefault(grupo, []).append(estado)
     decididas = select(Revisao.linha_id).distinct().scalar_subquery()
     pendentes = dict(db.execute(
         select(Evento.grupo, func.count(Linha.id))
@@ -152,19 +182,22 @@ def _resumos(db: Session, nomes: list[str] | None = None) -> list[dict]:
         alvos = {c for _, c, _ in folhas if c is not None}
         contam = [fid for fid, c, _ in folhas if c is None]
         pend = pendentes.get(g.nome, 0)
+        estados = [est for _, _, est in folhas] + sem_evento.get(g.nome, [])
         if e and not a:
             etapa = "encerrado"
-        elif not f:
+        elif not estados:
             etapa = "preparando"
-        elif any(est in ("recebida", "processando") for _, _, est in folhas):
+        elif any(est in ("recebida", "processando") for est in estados):
             etapa = "recebendo"
-        elif pend:
+        elif pend or g.nome in sem_evento or any(est in ("erro", "nao_e_folha")
+                                                  for est in estados):
+            # folha sem evento, em erro ou que não é folha também pede alguém
             etapa = "revisando"
         else:
             etapa = "pronto"
         saida.append({"nome": g.nome, "descricao": g.descricao, "eventos": e, "folhas": f,
                       "folhas_revisadas": r, "eventos_abertos": a, "pendentes": pend,
-                      "etapa": etapa,
+                      "etapa": etapa, "a_concluir": a_concluir.get(g.nome, 0),
                       "copias": sum(1 for _, c, _ in folhas if c is not None),
                       "com_copia": sum(1 for fid in contam if fid in alvos),
                       "leitura_unica": sum(1 for fid in contam if fid not in alvos)})
@@ -209,6 +242,8 @@ def renomear(nome: str, dados: GrupoEntrada, db: Session = Depends(dependencia_s
         db.execute(update(Evento).where(Evento.grupo == nome).values(grupo=dados.nome))
         db.execute(update(Folha).where(Folha.grupo_envio == nome)
                    .values(grupo_envio=dados.nome))
+        db.execute(update(BaseDePessoas).where(BaseDePessoas.grupo == nome)
+                   .values(grupo=dados.nome))
     grupo.descricao = dados.descricao
     db.commit()
     return _resumos(db, [dados.nome])[0]
@@ -223,6 +258,17 @@ def apagar(nome: str, db: Session = Depends(dependencia_sessao)) -> None:
     n = db.scalar(select(func.count()).select_from(Evento).where(Evento.grupo == nome))
     if n:
         raise HTTPException(409, f"o grupo tem {n} evento(s); encerre em vez de apagar")
+    # A lista do grupo vai junto, se nenhuma folha foi lida com ela. Se foi, apagar o grupo
+    # deixaria a lista sem dono e as folhas sem o nome de quem leram (22/11). A lista pode
+    # estar em `lista_id` (o caso normal, A66) ou em `base_id` (lida sem base geral).
+    usadas = db.scalar(select(func.count(Folha.id.distinct())).join(
+        BaseDePessoas, or_(Folha.base_id == BaseDePessoas.id,
+                           Folha.lista_id == BaseDePessoas.id))
+        .where(BaseDePessoas.grupo == nome))
+    if usadas:
+        raise HTTPException(409, f"a lista de pessoas do grupo foi usada por {usadas} folha(s)")
+    for base in db.scalars(select(BaseDePessoas).where(BaseDePessoas.grupo == nome)):
+        bases.retirar(db, base)
     db.delete(grupo)
     db.commit()
 

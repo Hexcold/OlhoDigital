@@ -16,6 +16,7 @@ function Secao({
   linhas: Linha[];
   travada: boolean;
   decididas: Record<number, Decidida>;
+  errosLinha: Record<number, string>;
   aoFocar: (id: number) => void;
   aoDecidir: (linha: Linha, matricula: string | null, rotulo: string, fora?: Fora) => void;
   aoDesfazer: (linha: Linha) => void;
@@ -37,6 +38,7 @@ function Secao({
             aoFocar={resto.aoFocar}
             aoDesfazer={resto.aoDesfazer}
             aoDecidir={resto.aoDecidir}
+            erro={resto.errosLinha[l.id]}
           />
         ))}
       </ul>
@@ -52,6 +54,7 @@ export default function Revisao() {
   const [decididas, setDecididas] = useState<Record<number, Decidida>>({});
   const [resumo, setResumo] = useState<ResumoRevisao | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [errosLinha, setErrosLinha] = useState<Record<number, string>>({});
   const { marcarFoco, parar } = useRelogio();
 
   useEffect(() => {
@@ -78,14 +81,16 @@ export default function Revisao() {
       }));
       try {
         await api.revisar(linha.id, matricula, ms, fora);
-        setErro(null);
+        setErrosLinha(({ [linha.id]: _, ...outros }) => outros);
       } catch (e) {
         setDecididas((d) => {
           const copia = { ...d };
           delete copia[linha.id];
           return copia;
         });
-        setErro(e instanceof ErroApi ? e.message : String(e));
+        // no cartão da linha, e não no topo: ver `erro` em `Bloco`
+        const texto = e instanceof ErroApi ? e.message : String(e);
+        setErrosLinha((x) => ({ ...x, [linha.id]: texto }));
       }
     },
     [parar],
@@ -167,6 +172,7 @@ export default function Revisao() {
         aviso="O gate não teve confiança suficiente. É aqui que a revisão humana recupera identificação."
         linhas={grupos.quarentena}
         decididas={decididas}
+        errosLinha={errosLinha}
         travada={travada}
         aoFocar={marcarFoco}
         aoDecidir={decidir}
@@ -177,6 +183,7 @@ export default function Revisao() {
         aviso="Aceitos com score alto, mas a matrícula escolhida tem vizinho a um dígito que também é pessoa real. O nome é a única evidência que denuncia a troca."
         linhas={grupos.perigosos}
         decididas={decididas}
+        errosLinha={errosLinha}
         travada={travada}
         aoFocar={marcarFoco}
         aoDecidir={decidir}
@@ -187,6 +194,7 @@ export default function Revisao() {
         aviso="Uma célula preenchida por inteiro anula a linha — a pessoa declarou que ela não vale."
         linhas={grupos.anuladas}
         decididas={decididas}
+        errosLinha={errosLinha}
         travada={travada}
         aoFocar={marcarFoco}
         aoDecidir={decidir}
@@ -197,6 +205,7 @@ export default function Revisao() {
         aviso="Auditoria por amostragem. Não precisam de decisão, mas conferir uma parte é o que pega o aceite errado."
         linhas={grupos.tranquilos}
         decididas={decididas}
+        errosLinha={errosLinha}
         travada={travada}
         aoFocar={marcarFoco}
         aoDecidir={decidir}

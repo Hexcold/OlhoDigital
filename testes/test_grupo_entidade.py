@@ -80,6 +80,34 @@ class GrupoEntidade(ComBanco):
                                                          "confirmacao": "EU"})
         self.assertEqual(self.grupo("EU")["etapa"], "encerrado")
 
+    def test_etapa_ve_a_folha_enviada_pelo_grupo_ainda_sem_evento(self):
+        # bateria de 22/11: as 62 folhas do lote passaram toda a leitura com o grupo em
+        # "preparando", porque a etapa só contava folha já ligada a evento pela chave
+        self.evento("TESTEUM", "EU")
+        f = self.folha(None, estado="recebida")
+        f.grupo_envio = "EU"
+        self.db.commit()
+        self.assertEqual(self.grupo("EU")["etapa"], "recebendo")
+        f.estado = "erro"
+        self.db.commit()
+        self.assertEqual(self.grupo("EU")["etapa"], "revisando")    # alguém precisa agir
+        f.estado = "processada"                                      # na bandeja, sem evento
+        self.db.commit()
+        g = self.grupo("EU")
+        self.assertEqual(g["etapa"], "revisando")
+        self.assertEqual(g["folhas"], 0)        # a contagem das folhas do grupo não muda
+
+    def test_a_concluir_nao_conta_copia(self):
+        # 22/11: "124 folha(s) ainda não foram concluídas" num grupo de 62 papéis
+        ev = self.evento("TESTEUM", "EU")
+        vale = self.folha(ev, nome="a.pdf")
+        copia = self.folha(ev, nome="b.pdf")
+        copia.copia_de = vale.id
+        concluida = self.folha(ev, nome="c.pdf", revisada=True)
+        self.db.commit()
+        self.assertEqual(self.grupo("EU")["a_concluir"], 1)
+        self.assertIsNotNone(concluida.revisada_em)
+
 
 if __name__ == "__main__":
     unittest.main()

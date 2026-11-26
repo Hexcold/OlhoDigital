@@ -40,10 +40,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-10 bg-marca-700 text-white shadow-sm">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
-          <Link to="/" className="flex items-center gap-3">
+        {/* No celular a marca encolhia até sumir e o menu quebrava em duas linhas (A63): a
+            marca não encolhe, e em tela estreita o menu desce para uma linha que rola. */}
+        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+          <Link to="/" className="flex shrink-0 items-center gap-3">
             {/* a marca (web/marca/gerar_marca.py): o nome vai em contornos, igual em todo lugar */}
-            <img src="/marca/olhodigital-branco.svg" alt="OlhoDigital" className="h-7" />
+            <img src="/marca/olhodigital-branco.svg" alt="OlhoDigital" className="h-7 w-auto shrink-0" />
             <span className="hidden text-xs text-marca-200 sm:inline">
               frequência a partir de listas manuscritas
             </span>
@@ -56,12 +58,12 @@ export default function App() {
               ← folhas
             </Link>
           ) : (
-            <nav className="ml-auto flex items-center gap-1 text-sm">
+            <nav className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-1 overflow-x-auto whitespace-nowrap text-sm sm:mx-0 sm:ml-auto sm:w-auto">
               {abas.map(({ para, texto }) => (
                 <Link
                   key={para}
                   to={para}
-                  className={`rounded px-2 py-1 ${
+                  className={`shrink-0 rounded px-2 py-1 ${
                     (para === "/" ? pathname === "/" || pathname.startsWith("/grupos/") : pathname === para)
                       ? "bg-marca-600 text-white"
                       : "text-marca-100 hover:bg-marca-600 hover:text-white"
@@ -76,9 +78,9 @@ export default function App() {
                   onClick={() =>
                     api.sair().finally(() => window.location.assign("/login"))
                   }
-                  className="rounded px-2 py-1 text-marca-100 hover:bg-marca-600 hover:text-white"
+                  className="shrink-0 rounded px-2 py-1 text-marca-100 hover:bg-marca-600 hover:text-white"
                 >
-                  sair ({eu.usuario})
+                  sair<span className="hidden sm:inline"> ({eu.usuario})</span>
                 </button>
               )}
             </nav>

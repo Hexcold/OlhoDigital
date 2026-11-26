@@ -197,10 +197,19 @@ class Folha(Base):
     # Nulos numa folha lida antes do D23, que foi decidida sem a regra e com o recorte v0.
     tau_nome: Mapped[float | None] = mapped_column(Float, nullable=True)
     recorte: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # D37: o corte da regra do nome que aponta para a pessoa. Nulo na folha lida antes dela.
+    corte_acaso: Mapped[float | None] = mapped_column(Float, nullable=True)
     # D25: com qual lista de matriculados esta folha foi lida. Nulo numa folha
     # lida antes das cargas existirem, que foi lida com a planilha de 21/08/2026.
     carga_base_id: Mapped[int | None] = mapped_column(ForeignKey("carga_base.id"),
                                                       nullable=True)
+    # Com qual base de pessoas (geral ou do grupo) a folha foi identificada (22/11). θ e δ
+    # foram calibrados com 1.334 pessoas, e o tamanho do contradomínio muda o que a margem
+    # significa (A26): o resultado de uma folha só se explica sabendo contra quem ela foi lida.
+    base_id: Mapped[int | None] = mapped_column(ForeignKey("base_pessoas.id"), nullable=True)
+    # E a lista do grupo que valia (A66): só quem está nela sai aceito; a identificação é contra
+    # a base acima. Nula sem lista.
+    lista_id: Mapped[int | None] = mapped_column(ForeignKey("base_pessoas.id"), nullable=True)
 
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     # Quando a folha entrou na fila pela última vez (envio, releitura, troca de escaneamento).
@@ -270,6 +279,11 @@ class Linha(Base):
     # cobertura a enxergam. Ela infla a frequência, que é o produto. A marca
     # existe para a revisão humana decidir qual das duas vale.
     duplicada_na_folha: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 22/11 (A66): o gate aceitou, mas o campeão não está na lista do grupo, e a linha foi para
+    # a quarentena por isso. Gravado na leitura, porque a lista da folha não muda depois.
+    fora_da_lista: Mapped[bool] = mapped_column(Boolean, default=False)
+    # D37 (A67): o resto do gate passou, e o nome lido casa igual ou melhor com muita gente.
+    nome_nao_confirma: Mapped[bool] = mapped_column(Boolean, default=False)
 
     folha: Mapped[Folha] = relationship(back_populates="linhas")
     # cascade para apagar a folha levar as revisões junto: sem isso a exclusão
@@ -355,3 +369,45 @@ class Participante(Base):
                                                       nullable=True)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime,
                                                     server_default=func.now())
+
+
+class BaseDePessoas(Base):
+    """A base geral do sistema (`grupo` nulo) ou a lista de um grupo (22/11).
+
+    A identificação é contra a geral; a lista do grupo só filtra quem sai aceito, e quem só
+    está nela também entra na identificação (A66). Ativa é a que vale agora; a
+    substituída ou apagada sai de uso, mas fica no banco enquanto alguma folha apontar para
+    ela, para a frequência antiga não perder nomes. Sem folha nenhuma, é apagada de vez.
+    """
+    __tablename__ = "base_pessoas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grupo: Mapped[str | None] = mapped_column(
+        ForeignKey("grupo.nome", onupdate="CASCADE"), nullable=True, index=True)
+    arquivo_original: Mapped[str] = mapped_column(String(300))
+    sha256: Mapped[str] = mapped_column(String(64))
+    aba: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # A data da EXTRAÇÃO da lista, quando se sabe: o .xlsx traz no nome da aba, o CSV do
+    # SIGAA não traz e quem envia informa. É o que deixa a prévia avisar de lista velha.
+    data_referencia: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # "envio" pela tela, ou "semente": a planilha do repositório, na primeira subida
+    origem: Mapped[str] = mapped_column(String(20), default="envio")
+    pessoas: Mapped[int] = mapped_column(Integer)
+    enviada_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    enviada_por: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    ativa: Mapped[bool] = mapped_column(Boolean, default=True)
+    retirada_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class PessoaDaBase(Base):
+    """Uma pessoa numa base. A mesma matrícula pode estar em várias bases, com o nome de cada."""
+    __tablename__ = "pessoa_base"
+
+    base_id: Mapped[int] = mapped_column(ForeignKey("base_pessoas.id", ondelete="CASCADE"),
+                                         primary_key=True)
+    matricula: Mapped[str] = mapped_column(String(20), primary_key=True)
+    nome: Mapped[str] = mapped_column(String(200))
+    # normalizado A-Z + espaço (D05), gravado uma vez: a busca da revisão e a leitura não
+    # normalizam a base a cada uso
+    nome_normalizado: Mapped[str] = mapped_column(String(200), index=True)
+    curso: Mapped[str | None] = mapped_column(String(200), nullable=True)

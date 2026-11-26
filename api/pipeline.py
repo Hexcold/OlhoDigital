@@ -61,21 +61,18 @@ def preparar() -> None:
 
 
 def carregar_recursos() -> dict[str, Any]:
-    """Base e classificadores, carregados UMA vez.
+    """Classificadores, carregados UMA vez.
 
     Carregar um modelo Keras leva segundos; fazer isso por requisição somaria
-    mais tempo que o próprio reconhecimento. A base também: `identificar` faz
-    milhares de comparações por chamada e normalizar 1.334 nomes dentro do laço
-    é o erro que as convenções do projeto proíbem explicitamente.
+    mais tempo que o próprio reconhecimento. A base de pessoas segue a mesma regra
+    em `api/bases.py`: normalizada uma vez e cacheada por base.
     """
     if _RECURSOS:
         return _RECURSOS
 
     preparar()
-    from identificar_folha import BASE_XLSX, CORTE_CNN            # noqa: E402
-    from base_alunos import carregar_base                          # noqa: E402
-    from normalizacao import normalizar                            # noqa: E402
-    from fuzzy import SIM_NOME, METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME  # noqa: E402
+    from identificar_folha import CORTE_CNN                       # noqa: E402
+    from fuzzy import SIM_NOME, METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME, CORTE_ACASO  # noqa: E402
     from ocr import OCRCNN                                         # noqa: E402
     from dados_treino import ALFABETO_MAIUSCULAS                   # noqa: E402
 
@@ -83,9 +80,8 @@ def carregar_recursos() -> dict[str, Any]:
     # mediu, e afinar desloca a escala da softmax que o corte de 0,95 usa.
     ocr_chave = OCRCNN.de_letras()
 
-    base = carregar_base(BASE_XLSX)
-    for pessoa in base:
-        pessoa["nome"] = normalizar(pessoa["nome"])   # uma vez, fora dos laços
+    # A base de pessoas NÃO está aqui desde 22/11: cada folha é lida com a do grupo dela, ou
+    # com a geral (`api/bases.py`), já normalizada e cacheada por base.
 
     # D12: a CNN base é o padrão. `modelo_letras` só é lido se alguém o definir
     # de propósito — o afinado viu todas as células de dev, e ligá-lo por
@@ -94,7 +90,6 @@ def carregar_recursos() -> dict[str, Any]:
                   if config.modelo_letras else ocr_chave)
 
     _RECURSOS.update(
-        base=base,
         ocr_matricula=OCRCNN.de_digitos(),
         ocr_letras=ocr_letras,
         ocr_chave=ocr_chave,
@@ -105,7 +100,7 @@ def carregar_recursos() -> dict[str, Any]:
         # OLHODIGITAL_MODELO_LETRAS apontando para ela, o ponto vale fora de onde foi medido.
         ponto={"alpha": ALPHA, "theta": THETA, "delta": DELTA,
                "metrica_nome": METRICA_NOME, "tau_nome": TAU_NOME,
-               "recorte": "v3"},
+               "corte_acaso": CORTE_ACASO, "recorte": "v3"},
         modelo_matricula="cnn base (mnist)",
         modelo_letras=config.modelo_letras or "cnn base (emnist)",
     )
@@ -201,6 +196,18 @@ def mensagem_marcadores(encontrados: set[int]) -> str:
             "clara demais; reescaneie e use \"trocar escaneamento\".")
 
 
+def _nome_no_pipeline(caminho_imagem: Path) -> str:
+    """O nome que o pipeline espera: `processar_folha` e `recortar_linhas` abrem
+    `dados/{nome}.png`, relativo ao cwd do pipeline.
+
+    `relpath`, e não `relative_to`: `OLHODIGITAL_PASTA_FOLHAS` é configurável, e
+    com a pasta fora de `dados/` o `relative_to` levantava ValueError e TODA folha
+    caía em erro. O `relpath` sobe com `..` e chega no mesmo arquivo.
+    """
+    return os.path.relpath(caminho_imagem.with_suffix(""),
+                           config.pasta_pipeline / "dados")
+
+
 def pasta_recortes(caminho_imagem: Path) -> Path:
     return caminho_imagem.parent / f"{caminho_imagem.stem}_linhas"
 
@@ -224,9 +231,8 @@ def recortar_para_revisao(caminho_imagem: Path, modelo_folha: str) -> int:
     destino = pasta_recortes(caminho_imagem)
     destino.mkdir(parents=True, exist_ok=True)
 
-    relativo = caminho_imagem.relative_to(config.pasta_pipeline / "dados")
     with _TRAVA:
-        tiras = recortar_linhas(str(relativo.with_suffix("")), modelo_folha)
+        tiras = recortar_linhas(_nome_no_pipeline(caminho_imagem), modelo_folha)
 
     for numero, b64 in tiras.items():
         (destino / f"{numero:02d}.jpg").write_bytes(base64.b64decode(b64))
@@ -276,7 +282,7 @@ def casar_chave(lida: str | None, chaves: list[str]):
     return casar(lida, chaves)
 
 
-def processar(caminho_imagem: Path, modelo_folha: str) -> list[dict]:
+def processar(caminho_imagem: Path, modelo_folha: str, base: list[dict]) -> list[dict]:
     """Uma folha -> uma lista de linhas, no ponto de operação vigente.
 
     `processar_folha` devolve QUATRO registros por linha (dois α × dois modos),
@@ -289,8 +295,7 @@ def processar(caminho_imagem: Path, modelo_folha: str) -> list[dict]:
 
     # `processar_folha` monta o caminho como `dados/{nome}.png`, então o nome
     # carrega o subdiretório. Isso evita mexer no módulo só para a API.
-    relativo = caminho_imagem.relative_to(config.pasta_pipeline / "dados")
-    nome = str(relativo.with_suffix(""))
+    nome = _nome_no_pipeline(caminho_imagem)
 
     from identificar_folha import processar_folha, ALPHAS  # noqa: E402
     ponto = recursos["ponto"]
@@ -301,7 +306,7 @@ def processar(caminho_imagem: Path, modelo_folha: str) -> list[dict]:
 
     with _TRAVA:
         registros, n_linhas, n_anuladas = processar_folha(
-            nome, modelo_folha, recursos["base"], recursos["ocr_matricula"],
+            nome, modelo_folha, base, recursos["ocr_matricula"],
             recursos["ocr_letras"], recursos["corte"], recursos["sim_nome"],
             recursos["corte"], recorte=ponto["recorte"])
 
@@ -324,6 +329,8 @@ def processar(caminho_imagem: Path, modelo_folha: str) -> list[dict]:
             "matricula_sugerida": topo,
             "candidatos": r["top3"],
             "duplicada_na_folha": False,
+            # D37: tudo passou, e foi o nome que não apontou para a pessoa
+            "nome_nao_confirma": r.get("nome_confirma") is False,
         })
 
     marcar_duplicadas(linhas)

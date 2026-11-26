@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ErroApi } from "../api";
+import BasePessoas from "../componentes/BasePessoas";
 import type { EtapaGrupo, Grupo } from "../tipos";
 
 /** D35: o início do sistema é a lista de grupos — cada grupo é uma coleta, do preparo ao
@@ -199,6 +200,8 @@ export default function Grupos() {
       {grupos && abertos.length === 0 && (
         <p className="text-sm text-slate-500">Nenhum grupo em andamento. Crie o primeiro acima.</p>
       )}
+
+      <BasePessoas />
 
       {encerrados.length > 0 && (
         <section>

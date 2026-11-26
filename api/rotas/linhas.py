@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,7 +22,9 @@ from sqlalchemy.orm import Session
 from ..db import dependencia_sessao
 from ..esquemas import RevisaoEntrada, RevisaoSaida
 from ..pipeline import pasta_recortes
-from ..tabelas import Linha, Participante, Revisao
+from ..sessao import usuario_logado
+from .. import bases
+from ..tabelas import Linha, Revisao
 
 rotas = APIRouter(prefix="/linhas", tags=["revisão"])
 
@@ -47,7 +49,7 @@ def recorte(linha_id: int, db: Session = Depends(dependencia_sessao)):
 
 
 @rotas.post("/{linha_id}/revisao", response_model=RevisaoSaida, status_code=201)
-def revisar(linha_id: int, entrada: RevisaoEntrada,
+def revisar(linha_id: int, entrada: RevisaoEntrada, request: Request,
             db: Session = Depends(dependencia_sessao)) -> Revisao:
     linha = db.get(Linha, linha_id)
     if linha is None:
@@ -64,8 +66,12 @@ def revisar(linha_id: int, entrada: RevisaoEntrada,
     # estaria afirmando uma identidade que a base não conhece. Participante
     # externo é caso real (a margem colapsa e δ o barra) e tem saída própria —
     # "não identificado", que é `matricula_escolhida = null`.
+    # A base é a com que a folha foi lida (22/11) e, com lista de grupo, a lista também: um convidado que só está nela é escolhível (A66).
+    # Quem não está na lista pode ser escolhido — a decisão humana manda (D03) —, e a
+    # frequência mostra "presente (fora da lista)".
+    base_id = bases.ids_da_folha(db, linha.folha)
     if entrada.matricula_escolhida is not None:
-        existe = db.get(Participante, entrada.matricula_escolhida)
+        existe = bases.pessoa(db, base_id, entrada.matricula_escolhida)
         if existe is None:
             raise HTTPException(
                 422, f"matrícula {entrada.matricula_escolhida} não está na base "
@@ -84,7 +90,7 @@ def revisar(linha_id: int, entrada: RevisaoEntrada,
             raise HTTPException(
                 422, f"matrícula {informada!r}: são 5 ou 6 dígitos (uma matrícula da base "
                      "tem 5)")
-        na_base = db.get(Participante, informada)
+        na_base = bases.pessoa(db, base_id, informada)
         if na_base is not None:
             raise HTTPException(
                 422, f"a matrícula {informada} está na base ({na_base.nome}); escolha a "
@@ -92,6 +98,9 @@ def revisar(linha_id: int, entrada: RevisaoEntrada,
         dados["matricula_informada"] = informada
         dados["nome_informado"] = " ".join((entrada.nome_informado or "").split()) or None
 
+    # Com login, a decisão é de quem está logado, e não do nome que o cliente mandar: a tela
+    # nunca mandou nenhum, e as revisões da bateria de 22/11 saíam todas sem revisor.
+    dados["revisor"] = usuario_logado(request) or dados.get("revisor")
     revisao = Revisao(linha_id=linha.id, **dados)
     db.add(revisao)
     db.commit()

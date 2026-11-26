@@ -52,11 +52,11 @@ cd web && npm ci && npm run build && cd ..
 O cliente chama sempre `/api/...` e o Vite faz o proxy para a porta 8000, então
 o mesmo caminho serve em produção, onde os dois ficam na mesma origem.
 
-Antes do primeiro uso, espelhe a base de participantes no banco:
-
-```sh
-curl -X POST http://127.0.0.1:8000/participantes/importar
-```
+A base de pessoas geral é enviada pela tela inicial, e a lista de um grupo, na aba "Eventos e
+chaves" dele. Toda folha é identificada contra a geral; com lista, só sai aceito quem está nela, e
+o resto vai à revisão. Na primeira subida sem base nenhuma, a
+planilha do repositório (`experimento-fuzzy/dados/Lista de Alunos Campus Quixadá.xlsx`) vira a
+base geral, e as folhas já lidas passam a apontar para ela.
 
 ## Configuração
 

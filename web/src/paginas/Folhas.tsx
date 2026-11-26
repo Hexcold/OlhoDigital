@@ -200,20 +200,20 @@ function Cartao({
     folha.estado === "processada" || folha.estado === "suspeita";
   const revisada = folha.situacao === "revisada";
 
-  async function reavaliar(modelo?: string) {
-    const temTrabalho = folha.situacao === "revisada" || folha.pendentes === 0;
-    if (
-      temTrabalho &&
-      !confirm(
-        `Reler "${folha.nome_original}"${modelo ? ` como ${modelo}` : ""}? ` +
-          "As leituras e as decisões humanas desta folha são descartadas.",
-      )
-    )
-      return;
+  /** Tenta sem forçar; só pergunta se o SERVIDOR disser que há decisões humanas a perder.
+   *  Antes, a tela adivinhava pelo número de pendentes, e uma folha em erro (sem linha
+   *  nenhuma) avisava que "as decisões humanas são descartadas" (A63). */
+  async function comConfirmacao(acao: (forcar: boolean) => Promise<unknown>, oQue: string) {
     setOcupado(true);
     setErro(null);
     try {
-      await api.reprocessar(folha.id, modelo, true);
+      try {
+        await acao(false);
+      } catch (e) {
+        if (!(e instanceof ErroApi && e.status === 409 && /decis/.test(e.message))) throw e;
+        if (!confirm(`${oQue} "${folha.nome_original}"? ${e.message.split(";")[0]}.`)) return;
+        await acao(true);
+      }
       aoMudar();
     } catch (e) {
       setErro(e instanceof ErroApi ? e.message : String(e));
@@ -223,29 +223,15 @@ function Cartao({
     }
   }
 
-  async function trocarEscaneamento(arquivo: File) {
-    // A61: o mesmo papel escaneado de novo, na MESMA folha — sem criar uma segunda folha
-    // que contaria todo mundo em dobro.
-    const temTrabalho = folha.situacao === "revisada" || (temLinhas && folha.pendentes === 0);
-    if (
-      temTrabalho &&
-      !confirm(
-        `Trocar o escaneamento de "${folha.nome_original}"? ` +
-          "As leituras e as decisões humanas desta folha são descartadas.",
-      )
-    )
-      return;
-    setOcupado(true);
-    setErro(null);
-    try {
-      await api.substituirEscaneamento(folha.id, arquivo, temTrabalho);
-      aoMudar();
-    } catch (e) {
-      setErro(e instanceof ErroApi ? e.message : String(e));
-    } finally {
-      setOcupado(false);
-    }
-  }
+  const reavaliar = (modelo?: string) =>
+    comConfirmacao((forcar) => api.reprocessar(folha.id, modelo, forcar),
+                   modelo ? `Reler como ${modelo}` : "Reler");
+
+  // A61: o mesmo papel escaneado de novo, na MESMA folha — sem criar uma segunda folha
+  // que contaria todo mundo em dobro.
+  const trocarEscaneamento = (arquivo: File) =>
+    comConfirmacao((forcar) => api.substituirEscaneamento(folha.id, arquivo, forcar),
+                   "Trocar o escaneamento de");
 
   async function decidirCopia(acao: "usar" | "nao") {
     const texto =
@@ -338,11 +324,7 @@ function Cartao({
         </p>
       )}
 
-      {folha.erro && (
-        <p className="mt-2 rounded bg-rose-50 px-2 py-1 font-mono text-xs text-rose-800">
-          {folha.erro}
-        </p>
-      )}
+      {folha.erro && <ErroDaFolha texto={folha.erro} />}
       {erro && (
         <p className="mt-2 rounded bg-rose-50 px-2 py-1 text-xs text-rose-800">
           {erro}
@@ -380,21 +362,34 @@ function Cartao({
 
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <button
+            onClick={() => reavaliar()}
+            disabled={ocupado}
+            title={`Ler de novo com a mesma geometria (${folha.modelo_folha})`}
+            className={
+              // erro é do sistema, não do papel: o conserto é reler, não escanear de novo
+              folha.estado === "erro"
+                ? "rounded bg-marca-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-marca-600 disabled:opacity-50"
+                : "rounded px-2 py-1.5 text-sm text-slate-500 hover:bg-marca-50 hover:text-marca-700 disabled:opacity-50"
+            }
+          >
+            {ocupado ? "…" : "reavaliar"}
+          </button>
+          <button
             onClick={async () => {
-              // Reler com OUTRA geometria é o conserto do lixo silencioso: a
-              // folha lida com o modelo errado não dá erro, dá 33 linhas de
-              // nada. Escolher o modelo certo é o que a recupera.
+              // Reler com OUTRA geometria é o conserto do lixo silencioso: a folha lida com
+              // o modelo errado não dá erro, dá 33 linhas de nada. É exceção, por isso fica
+              // fora do clique principal (A63: toda releitura perguntava a geometria).
               if (modelos.length) return setModelos([]);
               try {
                 setModelos(await api.modelosFolha());
-              } catch {
-                reavaliar();
+              } catch (e) {
+                setErro(e instanceof ErroApi ? e.message : String(e));
               }
             }}
             disabled={ocupado}
-            className="rounded px-2 py-1.5 text-sm text-slate-500 hover:bg-marca-50 hover:text-marca-700 disabled:opacity-50"
+            className="rounded px-1 py-1.5 text-xs text-slate-400 hover:text-marca-700 disabled:opacity-50"
           >
-            {ocupado ? "…" : "reavaliar"}
+            outra geometria
           </button>
           <input
             ref={seletor}
@@ -412,7 +407,7 @@ function Cartao({
             disabled={ocupado}
             title="Enviar outro escaneamento deste mesmo papel (imagem ou PDF de uma página)"
             className={
-              folha.estado === "nao_e_folha" || folha.estado === "erro"
+              folha.estado === "nao_e_folha"
                 ? "rounded bg-marca-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-marca-600 disabled:opacity-50"
                 : "rounded px-2 py-1.5 text-sm text-slate-500 hover:bg-marca-50 hover:text-marca-700 disabled:opacity-50"
             }
@@ -488,6 +483,23 @@ function Cartao({
   );
 }
 
+/** A frase para quem usa, e o detalhe técnico só a pedido (A63: a tela mostrava a exceção
+ *  Python crua). O servidor separa os dois com `DETALHE`, em `api/rotas/folhas.py`. */
+function ErroDaFolha({ texto }: { texto: string }) {
+  const [frase, detalhe] = texto.split("\n\ndetalhe técnico: ");
+  return (
+    <div className="mt-2 rounded bg-rose-50 px-2 py-1 text-sm text-rose-800">
+      {frase}
+      {detalhe && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs text-rose-700">detalhe técnico</summary>
+          <p className="mt-1 break-all font-mono text-xs">{detalhe}</p>
+        </details>
+      )}
+    </div>
+  );
+}
+
 /** "cerca de 7 min", para a estimativa da fila. */
 function duracao(segundos: number): string {
   if (segundos < 60) return "menos de 1 min";
@@ -547,6 +559,7 @@ export function PainelFolhas({ grupo }: { grupo?: string }) {
   const [arrastando, setArrastando] = useState(false);
   const [saude, setSaude] = useState<Record<string, string> | null>(null);
   const [soBandeja, setSoBandeja] = useState(false);
+  const [avisoEnvio, setAvisoEnvio] = useState<string | null>(null);
   const controle = useRef<AbortController | null>(null);
   // o progresso do envio: qual arquivo, que fração já subiu, e desde quando o servidor converte
   const [envio, setEnvio] = useState<{
@@ -617,13 +630,14 @@ export function PainelFolhas({ grupo }: { grupo?: string }) {
       if (!arquivos.length) return;
       setEnviando(true);
       setErro(null);
+      setAvisoEnvio(null);
       try {
         for (const [i, arquivo] of arquivos.entries()) {
           // Um envio pode virar VÁRIAS folhas: PDF de escâner traz uma folha
           // por página, que é o formato real das 500.
           setEnvio({ nome: arquivo.name, indice: i + 1, total: arquivos.length, fracao: 0,
                      convertendoDesde: null });
-          await api.enviarFolhaComProgresso(arquivo, (fracao) =>
+          const { folhas: devolvidas, jaEnviado } = await api.enviarFolhaComProgresso(arquivo, (fracao) =>
             setEnvio((e) =>
               e && {
                 ...e,
@@ -633,6 +647,13 @@ export function PainelFolhas({ grupo }: { grupo?: string }) {
             ),
             grupo,
           );
+          if (jaEnviado) {
+            // nada foi duplicado: dizer isso, em vez de o envio parecer não ter acontecido
+            const n = devolvidas.length;
+            setAvisoEnvio(
+              `“${arquivo.name}” já tinha sido enviado (${n} folha${n === 1 ? "" : "s"}); nada foi duplicado.`,
+            );
+          }
           await recarregar();
           setGatilhoFila((g) => g + 1);     // a fila começa a andar: pergunta já
         }
@@ -650,6 +671,7 @@ export function PainelFolhas({ grupo }: { grupo?: string }) {
     (f) => f.estado === "recebida" || f.estado === "processando",
   ).length;
   const bancoFora = saude?.banco && saude.banco !== "ok";
+  const emErro = folhas.filter((f) => f.estado === "erro").length;
   const bandeja = folhas.filter(
     (f) => f.estado === "processada" && f.evento_id === null,
   );
@@ -720,6 +742,35 @@ export function PainelFolhas({ grupo }: { grupo?: string }) {
       </label>
 
       {fila && <ProgressoFila fila={fila} />}
+
+      {emErro > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <span>
+            {emErro} folha{emErro === 1 ? "" : "s"} com erro de leitura.
+          </span>
+          <button
+            onClick={async () => {
+              setErro(null);
+              try {
+                await api.relerErros(grupo);
+                await recarregar();
+                setGatilhoFila((g) => g + 1);
+              } catch (e) {
+                setErro(e instanceof ErroApi ? e.message : String(e));
+              }
+            }}
+            className="rounded bg-rose-600 px-3 py-1.5 font-medium text-white hover:bg-rose-700"
+          >
+            reler {emErro === 1 ? "a folha" : `as ${emErro}`}
+          </button>
+        </div>
+      )}
+
+      {avisoEnvio && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {avisoEnvio}
+        </div>
+      )}
 
       {erro && (
         <div className="mt-4 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">

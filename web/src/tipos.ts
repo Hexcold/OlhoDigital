@@ -150,6 +150,8 @@ export interface Candidato {
   nome: string;
   curso: string | null;
   score: number;
+  /** A66: com lista de grupo, se o candidato está nela; null sem lista */
+  na_lista?: boolean | null;
 }
 
 export interface Linha {
@@ -171,6 +173,8 @@ export interface Linha {
    *  identificação — as duas linhas podem apontar para a pessoa certa —, então
    *  nenhuma métrica do sistema enxerga. O estrago é na frequência. */
   duplicada_na_folha: boolean;
+  /** A66: o gate aceitou, mas a pessoa não está na lista do grupo */
+  fora_da_lista?: boolean;
 
   /** Matrículas REAIS a um dígito da escolhida. É a medida de perigo de A15:
    *  um erro de leitura cai em pessoa existente, o score sai alto, a margem
@@ -221,6 +225,7 @@ export interface Participante {
   matricula: string;
   nome: string;
   curso: string | null;
+  na_lista?: boolean | null;
 }
 
 /** Os textos editáveis da folha. São os únicos campos que o servidor aceita. */
@@ -329,6 +334,8 @@ export interface Grupo {
   leitura_unica?: number;
   /** Papéis que contam e têm outro escaneamento guardado. */
   com_copia?: number;
+  /** Folhas que contam (sem as cópias) e ainda não tiveram a revisão concluída. */
+  a_concluir?: number;
 }
 
 /** O que um apagar em massa vai fazer, antes de fazer. As revisadas carregam a
@@ -360,4 +367,49 @@ export interface ChaveSugerida {
   /** a chave aberta mais próxima, e a distância até ela (≥ 4, A45) */
   mais_proxima: string | null;
   distancia: number | null;
+}
+
+/** Uma base de pessoas guardada no banco (22/11): a geral (`grupo` nulo) ou a de um grupo. */
+export interface BaseResumo {
+  id: number;
+  grupo: string | null;
+  arquivo: string;
+  aba: string | null;
+  origem: "envio" | "semente";
+  pessoas: number;
+  data_referencia: string | null;
+  enviada_em: string | null;
+  enviada_por: string | null;
+  /** quantas folhas foram lidas com ela */
+  folhas: number;
+}
+
+export interface SituacaoBase {
+  grupo: string | null;
+  /** a do próprio escopo: a do grupo, ou a geral quando `grupo` é nulo */
+  propria: BaseResumo | null;
+  geral: BaseResumo | null;
+  /** folhas lidas com outra base que não a que o escopo usa hoje */
+  desatualizadas: number;
+  /** decisões humanas nessas folhas, que reler descartaria */
+  decisoes_humanas: number;
+}
+
+export interface PreviaBase {
+  grupo: string | null;
+  arquivo: string;
+  aba: string | null;
+  data_referencia: string | null;
+  pessoas: number;
+  entram: number;
+  saem: number;
+  mudam: number;
+  comparada_com: BaseResumo | null;
+  fora_por_status: Record<string, number>;
+  sem_matricula_ou_nome: number;
+  matricula_invalida: number;
+  repetidas: number;
+  alertas: string[];
+  /** numa lista de grupo: quantas pessoas a base geral já conhece */
+  na_geral: number | null;
 }

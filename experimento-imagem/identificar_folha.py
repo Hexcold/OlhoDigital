@@ -69,7 +69,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "experimento-fuzzy
 from base_alunos import carregar_base                     # noqa: E402
 from normalizacao import normalizar                       # noqa: E402
 from fuzzy import (sim_levenshtein, identificar, SIM_NOME,     # noqa: E402
-                   METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME)
+                   METRICA_NOME, ALPHA, THETA, DELTA, TAU_NOME, CORTE_ACASO, fracao_nome)
 import recorte_celula                                     # noqa: E402
 
 # Os recortes de célula que `processar_folha` sabe fazer. "v0" é o de sempre, e o padrão aqui
@@ -508,6 +508,12 @@ def avaliar_linha(linha: Linha, modo: str, alpha: float, base: list[dict],
     # quarentena — custo medido zero na calibração, no dev e no teste (A59)
     aceito = (score >= THETA and margem >= DELTA and linha.matricula_completa
               and dois_canais)
+    # D37: o nome tem que apontar para o campeão mais que para o resto da base, mesmo com a
+    # matrícula exata (A67). Só se calcula para quem seria aceito: custa uma passada na base, e
+    # fora daí não muda nada. True quando não foi calculado.
+    nome_confirma = (not aceito
+                     or fracao_nome(nome_lido, campeao, base, sim_n) <= CORTE_ACASO)
+    aceito = aceito and nome_confirma
 
     return {
         "folha": linha.folha,
@@ -522,6 +528,7 @@ def avaliar_linha(linha: Linha, modo: str, alpha: float, base: list[dict],
         "motivos": [c.motivo for c in linha.celulas],
         "matricula_completa": linha.matricula_completa,
         "dois_canais": dois_canais,
+        "nome_confirma": nome_confirma,
         # o nome também, para a interface de revisão mostrar onde a leitura é
         # frágil — é o canal que deixa o humano notar a troca de pessoa (A15)
         "confiancas_nome": [round(c.confianca, 4) for c in linha.celulas_nome],
@@ -629,12 +636,13 @@ def conferir_contra_identificar(registros: list[dict], base: list[dict],
     for r in registros:
         if r["decisao"] == "anulada":
             continue        # não passou pelo matcher, não há o que conferir
-        # registro anterior ao D22/D23 não tem os campos: o gate era só score e margem
+        # registro anterior ao D22/D23/D37 não tem os campos: o gate era só score e margem
         ref = identificar(r["leitura"], r["leitura_nome"], base,
                           alpha=r["alpha"], theta=THETA, delta=DELTA,
                           sim_nome=sim_nome,
                           matricula_completa=r.get("matricula_completa", True),
-                          tau_nome=TAU_NOME if "dois_canais" in r else None)
+                          tau_nome=TAU_NOME if "dois_canais" in r else None,
+                          corte_acaso=CORTE_ACASO if "nome_confirma" in r else None)
         assert abs(ref["score"] - r["score"]) < 1e-12, (r, ref)
         assert abs(ref["margem"] - r["margem"]) < 1e-12, (r, ref)
         assert ref["decisao"] == r["decisao"], (r, ref)

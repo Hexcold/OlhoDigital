@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ErroApi } from "../api";
+import BasePessoas from "../componentes/BasePessoas";
 import { EncerrarGrupo } from "../componentes/EncerrarGrupo";
 import type {
   CabecalhoAjuste,
@@ -186,6 +187,7 @@ function AbaEventos({ g, aoMudar }: { g: GrupoT; aoMudar: () => void }) {
         </Link>
         , que cria os eventos e gera o PDF de uma vez.
       </p>
+      <BasePessoas grupo={g.nome} />
       <SugerirChaves nome={g.nome} aoUsar={setChave} />
       <Formulario aoCriar={mudou} grupos={[]} grupoFixo={g.nome} chavePreenchida={chave} />
       <section>
@@ -473,11 +475,11 @@ function AbaFolha({ g }: { g: GrupoT }) {
       />
 
       <section className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="text-base font-semibold">Imprimir em outro computador</h2>
+        <h2 className="text-base font-semibold">Imprimir pela conta de impressão</h2>
         <p className="mt-1 text-sm text-slate-600">
-          O programa de impressão do Windows não acessa este sistema. Baixe o pacote do grupo (o
-          modelo, os textos por evento e as chaves dos eventos abertos, com as folhas previstas) e
-          abra-o lá, em “Pacote de um grupo”.
+          Quem só imprime entra com a conta de impressão, que não vê os grupos. Baixe o pacote do
+          grupo (o modelo, os textos por evento e as chaves dos eventos abertos, com as folhas
+          previstas) e abra-o na tela de impressão, em “Pacote de um grupo”.
         </p>
         <a
           href={api.urlPacote(g.nome)}
@@ -563,6 +565,23 @@ export default function Grupo() {
   }, [nome]);
   useEffect(recarregar, [recarregar]);
 
+  // As contagens das abas e a etapa vêm deste resumo, e as abas mudam o grupo por conta
+  // própria (a planilha cadastra eventos, a revisão decide linhas, a fila lê folhas). Na
+  // bateria de 22/11, "Eventos 1" com 62 cadastrados e "Revisão 37" com 36 pendentes. É uma
+  // consulta só: recarregar ao trocar de aba e a cada 10 s custa pouco e não esquece caminho.
+  const abaNaUrl = busca.get("aba");
+  useEffect(() => {
+    recarregar();
+    const t = window.setInterval(recarregar, 10_000);
+    return () => window.clearInterval(t);
+  }, [recarregar, abaNaUrl]);
+
+  // No celular a barra de abas rola para o lado, e a aba aberta podia ficar fora da vista.
+  const abaAtiva = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    abaAtiva.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [abaNaUrl, g?.etapa]);
+
   if (erro) {
     return (
       <div className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
@@ -588,6 +607,7 @@ export default function Grupo() {
         {PASSOS.map((p, i) => (
           <button
             key={p.aba}
+            ref={aba === p.aba ? abaAtiva : undefined}
             onClick={() => setBusca({ aba: p.aba })}
             className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm ${
               aba === p.aba

@@ -136,9 +136,22 @@ function Selo({ decisao }: { decisao: Linha["decisao"] }) {
   );
 }
 
+/** A66: a pessoa pode ser escolhida, mas não está na lista do grupo; a frequência a marca
+ *  como "presente (fora da lista)". */
+function ForaDaLista() {
+  return (
+    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+      fora da lista
+    </span>
+  );
+}
+
 function Busca({
+  linha,
   aoEscolher,
 }: {
+  /** a busca é na base com que a folha desta linha foi lida */
+  linha: number;
   aoEscolher: (p: Participante) => void;
 }) {
   const [termo, setTermo] = useState("");
@@ -152,10 +165,10 @@ function Busca({
     // Espera curta antes de consultar: digitar "silva" dispararia cinco
     // consultas contra as 1.334 pessoas sem isso.
     const t = setTimeout(() => {
-      api.buscarParticipantes(termo).then(setAchados).catch(() => setAchados([]));
+      api.buscarParticipantes(termo, linha).then(setAchados).catch(() => setAchados([]));
     }, 200);
     return () => clearTimeout(t);
-  }, [termo]);
+  }, [termo, linha]);
 
   return (
     <div className="mt-3">
@@ -182,6 +195,7 @@ function Busca({
                   {p.matricula}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{p.nome}</span>
+                {p.na_lista === false && <ForaDaLista />}
               </button>
             </li>
           ))}
@@ -198,9 +212,13 @@ export function Bloco({
   aoFocar,
   aoDecidir,
   aoDesfazer,
+  erro,
 }: {
   linha: Linha;
   decidida?: Decidida;
+  /** O servidor recusou a última decisão desta linha. Mostrado no próprio cartão: no topo
+   *  da lista, com 36 cartões, não se sabia qual linha tinha falhado (22/11). */
+  erro?: string;
   /** Folha concluída: a decisão vira leitura. Mudar presença depois do
    *  carimbo faria o carimbo não significar nada. */
   travada: boolean;
@@ -238,6 +256,11 @@ export function Bloco({
           score {linha.score.toFixed(3)} · margem {linha.margem.toFixed(3)}
         </span>
       </div>
+      {erro && (
+        <p role="alert" className="mt-2 rounded border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-900">
+          {erro}
+        </p>
+      )}
 
       {linha.duplicada_na_folha && (
         <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
@@ -340,12 +363,13 @@ export function Bloco({
                   </span>
                   <span className="font-mono text-xs">{c.matricula}</span>
                   <span className="min-w-0 flex-1 truncate">{c.nome}</span>
+                  {c.na_lista === false && <ForaDaLista />}
                 </button>
               </li>
             ))}
           </ul>
 
-          <Busca aoEscolher={(p) => aoDecidir(linha, p.matricula, p.nome)} />
+          <Busca linha={linha.id} aoEscolher={(p) => aoDecidir(linha, p.matricula, p.nome)} />
 
           {foraAberto ? (
             <ForaDaBase

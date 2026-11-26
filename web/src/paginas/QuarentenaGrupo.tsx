@@ -27,6 +27,7 @@ export function QuarentenaDoGrupo({ nome, embutida = false }: { nome: string; em
   const [jaVinham, setJaVinham] = useState<Set<number>>(new Set());
   const [mostrarDecididas, setMostrarDecididas] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [errosLinha, setErrosLinha] = useState<Record<number, string>>({});
   const { marcarFoco, parar } = useRelogio();
 
   useEffect(() => {
@@ -51,14 +52,16 @@ export function QuarentenaDoGrupo({ nome, embutida = false }: { nome: string; em
       }));
       try {
         await api.revisar(linha.id, matricula, ms, fora);
-        setErro(null);
+        setErrosLinha(({ [linha.id]: _, ...outros }) => outros);
       } catch (e) {
         setDecididas((d) => {
           const copia = { ...d };
           delete copia[linha.id];
           return copia;
         });
-        setErro(e instanceof ErroApi ? e.message : String(e));
+        // no cartão da linha, e não no topo: ver `erro` em `Bloco`
+        const texto = e instanceof ErroApi ? e.message : String(e);
+        setErrosLinha((x) => ({ ...x, [linha.id]: texto }));
       }
     },
     [parar],
@@ -182,6 +185,7 @@ export function QuarentenaDoGrupo({ nome, embutida = false }: { nome: string; em
                   aoFocar={marcarFoco}
                   aoDecidir={decidir}
                   aoDesfazer={desfazer}
+                  erro={errosLinha[l.id]}
                 />
               ))}
             </ul>

@@ -20,24 +20,26 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form,
-                     HTTPException, UploadFile)
-from fastapi.responses import FileResponse, JSONResponse
+                     HTTPException, Request, UploadFile)
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from .. import documentos, pipeline, reenvio
+from .. import bases, documentos, pipeline, reenvio
 from ..config import config
 from ..db import dependencia_sessao, sessao
+from ..sessao import usuario_logado
 from ..esquemas import (EventoSugerido, FilaSaida, FolhaSaida, LinhaSaida, PedidoApagarFolhas,
                         PreviaApagar, REVISOR_AUTOMATICO, ResumoRevisao, SugestaoEventos,
                         VinculoEntrada, montar_folha, montar_linha, sem_matricula,
                         ultima_revisao)
-from ..tabelas import Evento, Folha, Grupo, Linha, Participante, Revisao
+from ..tabelas import Evento, Folha, Grupo, Linha, PessoaDaBase, Revisao
 
 rotas = APIRouter(prefix="/folhas", tags=["folhas"])
 log = logging.getLogger("olhodigital")
@@ -60,8 +62,9 @@ def _eventos_abertos(db: Session, grupo: str | None = None) -> list[Evento]:
 def _vincular_evento(db: Session, folha: Folha) -> None:
     """Lê a chave e liga a folha ao evento, se o gate deixar (D17).
 
-    Falhar aqui não derruba a folha: as linhas já foram lidas, e sem evento ela
-    vai para a bandeja, que é onde folha sem vínculo deve estar.
+    Roda ANTES da identificação desde 22/11, porque o grupo do evento escolhe a lista
+    de pessoas. Falhar aqui não derruba a folha: sem evento, vale a lista do grupo de onde
+    ela foi enviada (ou nenhuma), e a folha vai para a bandeja, onde folha sem vínculo deve estar.
     """
     try:
         folha.chave_lida = pipeline.ler_chave(Path(folha.arquivo),
@@ -125,6 +128,10 @@ def _encerrados_com_a_chave(db: Session, chave: str) -> list[Evento]:
                            .order_by(Evento.encerrado_em.desc().nullslast())))
 
 
+# Separa, no texto do erro, a frase para quem usa do detalhe técnico (a tela o esconde).
+DETALHE = "\n\ndetalhe técnico: "
+
+
 def _ler_e_gravar(folha_id: int) -> None:
     """Roda o pipeline e grava as linhas. Executa fora da requisição.
 
@@ -164,22 +171,49 @@ def _ler_e_gravar(folha_id: int) -> None:
             db.commit()
             return
 
+        # A chave antes da identificação (22/11): é o evento que diz o grupo, e o grupo diz
+        # contra qual base de pessoas ler — a dele, ou a geral (`api/bases.py`).
+        _vincular_evento(db, folha)
+        # A66: a lista do grupo filtra quem sai aceito; a identificação é contra a geral
+        base, lista = bases.para_identificar(db, bases.grupo_da_folha(db, folha))
+        if base is None:
+            folha.estado = "erro"
+            folha.erro = ("nenhuma base de pessoas para comparar: envie a lista de matriculados "
+                          "na tela inicial (base geral) ou na aba do grupo")
+            folha.processada_em = datetime.now(timezone.utc)
+            db.commit()
+            return
+        folha.base_id = base.id
+        folha.lista_id = lista.id if lista else None
+
         try:
             recursos = pipeline.carregar_recursos()
-            linhas = pipeline.processar(caminho, folha.modelo_folha)
+            linhas = pipeline.processar(caminho, folha.modelo_folha,
+                                        bases.para_leitura(db, folha.base_id, folha.lista_id))
             pipeline.recortar_para_revisao(caminho, folha.modelo_folha)
         except Exception as e:                      # noqa: BLE001
             # A folha não some e o erro fica no registro: com 500 folhas, uma
             # que falha em silêncio é uma presença perdida sem rastro.
             folha.estado = "erro"
-            folha.erro = f"{type(e).__name__}: {e}"
+            # A frase é para quem usa; o detalhe, para quem mantém. A tela mostrava só a
+            # exceção crua ("ValueError: '/tmp/…' is not in the subpath…", A63).
+            folha.erro = (f"A leitura falhou por um problema do sistema, não da folha. Tente "
+                          f"\"reavaliar\"; se repetir, guarde o detalhe técnico."
+                          f"{DETALHE}{type(e).__name__}: {e}")
             # a hora entra na conta do lote no progresso da fila: sem ela, a folha que falhou
             # não teria como dizer quando saiu da fila
             folha.processada_em = datetime.now(timezone.utc)
             db.commit()
             return
 
+        na_lista = bases.matriculas(db, lista.id) if lista else None
         for dados in linhas:
+            # A66: o gate aceitou alguém que não está na lista do grupo — quarentena. Com a
+            # geral identificando, quem assinou sem estar na lista é reconhecido como ele mesmo
+            # e para aqui, em vez de virar o mais parecido da lista (Experimento 04, parte 2).
+            if (na_lista is not None and dados["decisao"] == "aceito"
+                    and dados.get("matricula_sugerida") not in na_lista):
+                dados = {**dados, "decisao": "quarentena", "fora_da_lista": True}
             linha = Linha(folha_id=folha.id, **dados)
             # D26: só o nome, sem dígito lido na matrícula. Fica na quarentena, à vista,
             # mas já decidida como "não identificado": presença sem matrícula não se
@@ -217,6 +251,10 @@ def _ler_e_gravar(folha_id: int) -> None:
         if len(linhas) >= 5 and aceitos == 0:
             motivo = f"{len(linhas)} linhas e nenhum aceite"
         if motivo:
+            # Como antes de 22/11: a suspeita não fica ligada sozinha a evento nenhum. A ligação
+            # subiu para antes da leitura só para escolher a base; a humana fica como está.
+            if folha.origem_vinculo == "automatico":
+                folha.evento_id = folha.origem_vinculo = None
             folha.estado = "suspeita"
             folha.erro = (
                 f"{motivo} — assinatura de recorte com a geometria errada. "
@@ -232,21 +270,24 @@ def _ler_e_gravar(folha_id: int) -> None:
         folha.metrica_nome = ponto["metrica_nome"]
         folha.tau_nome = ponto["tau_nome"]
         folha.recorte = ponto["recorte"]
+        # `get`: um ponto sem a regra (os dublês dos testes) é folha lida sem ela
+        folha.corte_acaso = ponto.get("corte_acaso")
         folha.modelo_matricula = recursos["modelo_matricula"]
         folha.modelo_letras = recursos["modelo_letras"]
-        _vincular_evento(db, folha)
         folha.estado = "processada"
         folha.processada_em = datetime.now(timezone.utc)
         db.flush()
         # D30: outro escaneamento de uma folha que já está no evento? A cópia não conta.
         reenvio.detectar(db, folha)
+        # relida com outra base, a antiga pode ter perdido a última folha que a guardava
+        bases.limpar_retiradas(db)
         db.commit()
     finally:
         db.close()
 
 
 @rotas.post("", response_model=list[FolhaSaida], status_code=201)
-async def enviar(tarefas: BackgroundTasks,
+async def enviar(tarefas: BackgroundTasks, resposta: Response,
                  arquivo: UploadFile = File(...),
                  evento_id: int | None = Form(None),
                  modelo_folha: str = Form(config.modelo_folha_padrao),
@@ -266,6 +307,9 @@ async def enviar(tarefas: BackgroundTasks,
     ja = list(db.scalars(select(Folha).where(Folha.origem_sha256 == origem)
                          .order_by(Folha.pagina)))
     if ja:
+        # 200 e não 201: nada foi criado. É o que deixa a tela dizer "este arquivo já tinha
+        # sido enviado" — antes o reenvio voltava igual a um envio novo, e ninguém sabia
+        resposta.status_code = 200
         return ja
 
     try:
@@ -299,8 +343,8 @@ async def enviar(tarefas: BackgroundTasks,
         criadas.append(folha)
     db.commit()
 
-    for folha in criadas:
-        tarefas.add_task(_ler_e_gravar, folha.id)
+    # um pedido de leitura para o envio inteiro: `ler_fila` pega as folhas na ordem da fila
+    tarefas.add_task(ler_fila)
     return criadas
 
 
@@ -332,13 +376,52 @@ def retomar_fila(db: Session) -> list[int]:
 
 
 def ler_em_sequencia(ids: list[int]) -> None:
-    """Lê as folhas, uma por vez. É o corpo da thread que retoma a fila ao subir."""
+    """Lê as folhas dadas, uma por vez, sem deixar uma falha parar as outras."""
     for folha_id in ids:
         try:
             _ler_e_gravar(folha_id)
         except Exception:                                  # noqa: BLE001
             # uma folha que falha não para a fila: o erro fica no log, e as outras seguem
-            log.exception("falha ao ler a folha %s na fila retomada", folha_id)
+            log.exception("falha ao ler a folha %s na fila", folha_id)
+
+
+# Um leitor só no processo inteiro. Antes, cada "reavaliar" ou "trocar escaneamento" agendava
+# a sua própria leitura, e elas rodavam em paralelo: cada uma marcava a folha "processando" e
+# esperava a trava do pipeline SEGURANDO uma conexão do banco. Com 15 esperando, o pool
+# (5 + 10) acabou, e toda requisição — o login, a barra de progresso — esperava 30 s e caía
+# em 500 (bateria de 22/11, 61 releituras pedidas em sequência).
+_LEITOR = threading.Lock()
+
+
+def _proxima_na_fila(ja_tentadas: set[int]) -> int | None:
+    """A folha que espera há mais tempo, numa sessão curta que devolve a conexão na hora."""
+    with sessao() as db:
+        return db.scalar(
+            select(Folha.id).where(Folha.estado == "recebida", Folha.id.not_in(ja_tentadas))
+            .order_by(Folha.na_fila_desde.asc().nulls_last(), Folha.id).limit(1))
+
+
+def ler_fila() -> None:
+    """Lê tudo que está "recebida", se ninguém estiver lendo; senão volta na hora.
+
+    Quem chega com a fila já sendo lida não espera nem segura conexão: o leitor que está
+    rodando pega a folha nova quando terminar a atual. `ja_tentadas` impede o laço de
+    girar para sempre numa folha que continua "recebida" (uma leitura que falhou antes de
+    reivindicá-la). Depois de soltar a trava, confere de novo: uma folha que entrou no
+    instante entre "não há mais nada" e soltar ficaria parada até o próximo envio.
+    """
+    ja_tentadas: set[int] = set()
+    while True:
+        if not _LEITOR.acquire(blocking=False):
+            return
+        try:
+            while (folha_id := _proxima_na_fila(ja_tentadas)) is not None:
+                ja_tentadas.add(folha_id)
+                ler_em_sequencia([folha_id])
+        finally:
+            _LEITOR.release()
+        if _proxima_na_fila(ja_tentadas) is None:
+            return
 
 
 def _prontas_do_lote(db: Session, entradas_pendentes: list[datetime]) -> int:
@@ -381,8 +464,11 @@ def _ritmo(db: Session) -> float:
     # Sem relógio de parede: a "última hora" conta a partir da leitura mais recente. Comparar
     # com o agora do Python errava 3 h, porque o banco guarda a hora no fuso dele
     # (Brazil/East) e o Python a gera em UTC: nenhuma leitura entrava e o ritmo caía nos 9 s.
+    # Sem as folhas em erro: uma falha leva milissegundos, e um lote inteiro que falhou
+    # pôs a mediana em 0 s e a tela em "0 s por folha" durante a releitura.
     recentes = list(db.scalars(
-        select(Folha.processada_em).where(Folha.processada_em.is_not(None))
+        select(Folha.processada_em).where(Folha.processada_em.is_not(None),
+                                          Folha.estado != "erro")
         .order_by(Folha.processada_em.desc()).limit(21)))
     momentos = sorted(t for t in recentes if recentes and t >= recentes[0] - timedelta(hours=1))
     passos = sorted(b.timestamp() - a.timestamp() for a, b in zip(momentos, momentos[1:])
@@ -665,16 +751,25 @@ def para_revisao(db: Session, pares: list[tuple[Folha, list[Linha]]]) -> list[di
     # perigo de A15: um erro de leitura transforma a matrícula de alguém na de
     # outra pessoa real, o score sai alto, a margem sai folgada, e nem θ nem δ
     # percebem. 62,6% da base tem ao menos um vizinho assim.
+    # Na base com que CADA folha foi lida (22/11): o vizinho perigoso é uma pessoa real
+    # daquele contradomínio, e a lista do grupo pode trazer gente que a geral não tem (A66).
     candidatas: set[str] = set()
+    ids_de = {folha.id: bases.ids_da_folha(db, folha) for folha, _ in pares}
     for _, achadas in pares:
         for linha in achadas:
             candidatas |= _variacoes(linha.matricula_sugerida)
-    reais = set(db.scalars(select(Participante.matricula)
-                           .where(Participante.matricula.in_(candidatas)))) \
-        if candidatas else set()
+    reais_por_base: dict[int | None, set[str]] = {}
+    if candidatas:
+        for base_id, matricula in db.execute(
+                select(PessoaDaBase.base_id, PessoaDaBase.matricula)
+                .where(PessoaDaBase.base_id.in_({b for ids in ids_de.values() for b in ids}),
+                       PessoaDaBase.matricula.in_(candidatas))):
+            reais_por_base.setdefault(base_id, set()).add(matricula)
 
     saida = []
     for folha, achadas in pares:
+        reais = set().union(*(reais_por_base.get(i, set()) for i in ids_de[folha.id]))
+        lista = bases.lista_da_folha(db, folha)
         # θ e δ vêm da FOLHA, não do `fuzzy`: são os que produziram estas decisões.
         # Explicar a rejeição com o limiar de hoje quando a leitura foi feita com o
         # de ontem daria uma explicação que não corresponde ao que aconteceu. O
@@ -686,9 +781,14 @@ def para_revisao(db: Session, pares: list[tuple[Folha, list[Linha]]]) -> list[di
         theta = folha.theta if folha.theta is not None else THETA
         delta = folha.delta if folha.delta is not None else DELTA
         # o τ é o da folha, nulo se ela foi lida antes da regra dos dois canais (D23)
-        saida += [montar_linha(l, sorted(_variacoes(l.matricula_sugerida) & reais),
-                               theta, delta, folha.tau_nome)
-                  for l in achadas]
+        for l in achadas:
+            dados = montar_linha(l, sorted(_variacoes(l.matricula_sugerida) & reais),
+                                 theta, delta, folha.tau_nome)
+            if lista is not None:
+                # A66: quem revisa vê quais candidatos estão na lista do grupo
+                dados["candidatos"] = [{**c, "na_lista": c.get("matricula") in lista}
+                                       for c in (dados.get("candidatos") or [])]
+            saida.append(dados)
     return saida
 
 
@@ -734,7 +834,7 @@ def resumo(folha_id: int,
 
 
 @rotas.post("/{folha_id}/concluir", response_model=ResumoRevisao)
-def concluir(folha_id: int, revisor: str | None = None,
+def concluir(folha_id: int, request: Request, revisor: str | None = None,
              db: Session = Depends(dependencia_sessao)) -> ResumoRevisao:
     """Fecha a revisão da folha. Ato explícito, e não consequência.
 
@@ -760,7 +860,7 @@ def concluir(folha_id: int, revisor: str | None = None,
             409, f"{resultado.pendentes} linha(s) em quarentena sem decisão")
 
     folha.revisada_em = datetime.now(timezone.utc)
-    folha.revisada_por = revisor
+    folha.revisada_por = usuario_logado(request) or revisor      # ver `linhas.revisar`
     db.commit()
     return resultado
 
@@ -817,6 +917,27 @@ def nao_e_copia(folha_id: int, db: Session = Depends(dependencia_sessao)) -> dic
     return obter(folha_id, db)
 
 
+@rotas.post("/reler-erros")
+def reler_erros(tarefas: BackgroundTasks, grupo: str | None = None,
+                db: Session = Depends(dependencia_sessao)) -> dict:
+    """Devolve à fila as folhas em erro (do grupo, ou todas). Um lote inteiro em erro eram 62
+    cliques em "reavaliar" (A63). Só `erro`: a "não é folha" pede outro escaneamento, e a
+    "suspeita" costuma ser geometria, que se escolhe folha a folha. Folha em erro não tem
+    linha, então não há decisão humana a perder.
+    """
+    if grupo is not None:
+        candidatas = bases.folhas_do_grupo(db, grupo)
+    else:
+        candidatas = list(db.scalars(select(Folha).where(Folha.estado == "erro")))
+    em_erro = [f for f in candidatas if f.estado == "erro"]
+    for folha in em_erro:
+        _zerar_leitura(folha, db)
+    db.commit()
+    if em_erro:
+        tarefas.add_task(ler_fila)
+    return {"relidas": len(em_erro)}
+
+
 @rotas.post("/{folha_id}/reprocessar", response_model=FolhaSaida)
 def reprocessar(folha_id: int, tarefas: BackgroundTasks,
                 modelo_folha: str | None = None, forcar: bool = False,
@@ -838,7 +959,7 @@ def reprocessar(folha_id: int, tarefas: BackgroundTasks,
     _zerar_leitura(folha, db)
     db.commit()
 
-    tarefas.add_task(_ler_e_gravar, folha.id)
+    tarefas.add_task(ler_fila)
     return montar_folha(folha)
 
 
@@ -941,7 +1062,7 @@ async def substituir(folha_id: int, tarefas: BackgroundTasks,
     if antiga != nova:
         antiga.unlink(missing_ok=True)
 
-    tarefas.add_task(_ler_e_gravar, folha.id)
+    tarefas.add_task(ler_fila)
     return montar_folha(folha)
 
 
@@ -991,6 +1112,7 @@ def registro_da_folha(db: Session, folha: Folha) -> dict:
             "alpha": folha.alpha, "theta": folha.theta, "delta": folha.delta,
             "metrica_nome": folha.metrica_nome,
             "tau_nome": folha.tau_nome, "recorte": folha.recorte,
+            "corte_acaso": folha.corte_acaso,
             "modelo_matricula": folha.modelo_matricula,
             "modelo_letras": folha.modelo_letras,
         },

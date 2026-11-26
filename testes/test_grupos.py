@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -20,7 +21,8 @@ import apoio                                                   # noqa: F401  iso
 from api.db import dependencia_sessao
 from api.main import app
 from api.rotas import grupos
-from api.tabelas import Base, Evento, Folha, Grupo, Linha, Participante, Revisao
+from api.tabelas import (Base, BaseDePessoas, Evento, Folha, Grupo, Linha, PessoaDaBase,
+                         Revisao)
 
 PESSOAS = {"900001": "ZULEICA AMARANTE FROTA", "900002": "QUITERIA BRANDAO VIEGAS",
            "912345": "OTONIEL BARCELAR FURTADO"}
@@ -45,12 +47,27 @@ class ComBanco(unittest.TestCase):
 
         app.dependency_overrides[dependencia_sessao] = sessao_de_teste
         self.addCleanup(app.dependency_overrides.clear)
+        # A leitura em segundo plano (`ler_fila`) abre a própria sessão, fora da injeção do
+        # FastAPI. Sem isto, um teste que envia folha consultaria o Postgres configurado, e
+        # com o banco de verdade no ar leria as folhas DELE.
+        from api.rotas import folhas as rotas_folhas
+        trocar = mock.patch.object(rotas_folhas, "sessao", self.Sessao)
+        trocar.start()
+        self.addCleanup(trocar.stop)
         self.addCleanup(self.db.close)
         self.cliente = TestClient(app, raise_server_exceptions=False)
         self.pasta = Path(tempfile.mkdtemp(prefix="olhodigital_grupos_"))
-        self.db.add_all(Participante(matricula=m, nome=n, nome_normalizado=n, curso="CURSO X")
-                        for m, n in PESSOAS.items())
+        # 22/11: a base é a geral do sistema (`api/bases.py`), não mais a tabela única
+        geral = BaseDePessoas(grupo=None, arquivo_original="inventada.xlsx", sha256="0" * 64,
+                              pessoas=len(PESSOAS), ativa=True)
+        self.db.add(geral)
+        self.db.flush()
+        self.db.add_all(PessoaDaBase(base_id=geral.id, matricula=m, nome=n, nome_normalizado=n,
+                                     curso="CURSO X") for m, n in PESSOAS.items())
         self.db.commit()
+        self.base_geral = geral
+        from api import bases
+        bases._PARA_LEITURA.clear()         # o cache é por id, e cada teste tem um banco novo
 
     # --- fábricas -------------------------------------------------------------------------
     def evento(self, chave, grupo=None, horas=0):
@@ -116,10 +133,11 @@ class Grupos(ComBanco):
             # D30: sem cópia, as 2 folhas do EU são de leitura única
             {"nome": "EU", "eventos": 2, "folhas": 2, "folhas_revisadas": 1, "eventos_abertos": 2,
              "copias": 0, "leitura_unica": 2, "com_copia": 0,
-             "etapa": "pronto", "descricao": None, "pendentes": 0},          # D35
+             "etapa": "pronto", "descricao": None, "pendentes": 0,           # D35
+             "a_concluir": 1},
             {"nome": "OUTRO", "eventos": 1, "folhas": 0, "folhas_revisadas": 0,
              "eventos_abertos": 1, "copias": 0, "leitura_unica": 0, "com_copia": 0,
-             "etapa": "preparando", "descricao": None, "pendentes": 0}])
+             "etapa": "preparando", "descricao": None, "pendentes": 0, "a_concluir": 0}])
 
     def test_por_no_grupo_e_todos_ou_nenhum(self):
         a, b = self.evento("TESTEUM"), self.evento("TESTEDOIS")
