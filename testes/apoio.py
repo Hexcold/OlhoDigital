@@ -1,8 +1,8 @@
 """O que os testes dividem: caminhos, raster e alinhamento.
 
 Importar este módulo isola a bateria do que é real: o cabeçalho salvo vai para uma
-pasta temporária e o banco aponta para uma porta fechada. Nenhum teste toca em
-`cabecalho.json`, no Postgres ou em `dados/`.
+pasta temporária, as folhas e as bases enviadas também, e o banco aponta para uma porta
+fechada. Nenhum teste escreve em `cabecalho.json`, no Postgres ou em `dados/`.
 """
 import os
 import subprocess
@@ -17,6 +17,9 @@ ESTADO = Path(tempfile.mkdtemp(prefix="olhodigital_testes_"))
 os.environ["OLHODIGITAL_CABECALHO"] = str(ESTADO / "cabecalho.json")
 os.environ["OLHODIGITAL_DATABASE_URL"] = "postgresql+psycopg://x@127.0.0.1:1/x"
 os.environ["OLHODIGITAL_ARQUIVO_USUARIOS"] = str(ESTADO / "usuarios.json")
+# 24/11: sem isto, os testes que enviam folha gravavam a imagem na pasta da produção
+os.environ["OLHODIGITAL_PASTA_FOLHAS"] = str(ESTADO / "enviadas")
+os.environ["OLHODIGITAL_PASTA_BASES"] = str(ESTADO / "bases")
 os.environ.setdefault("KERAS_BACKEND", "torch")
 for caminho in (RAIZ, PIPELINE):
     sys.path.insert(0, str(caminho))
