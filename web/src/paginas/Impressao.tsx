@@ -568,8 +568,8 @@ function AbrirPacote() {
     <section className="rounded-lg border border-slate-200 bg-white p-4">
       <h2 className="text-base font-semibold">Pacote de um grupo</h2>
       <p className="mt-1 text-sm text-slate-600">
-        No sistema completo, cada grupo tem o seu modelo de folha. Baixe lá o{" "}
-        <strong>pacote de impressão</strong> do grupo (aba Folha) e abra aqui: as folhas saem com
+        Cada grupo tem o seu modelo de folha. Quem administra o grupo baixa o{" "}
+        <strong>pacote de impressão</strong> na aba Folha dele; abra-o aqui, e as folhas saem com
         o modelo e os ajustes de cada evento.
       </p>
       <input

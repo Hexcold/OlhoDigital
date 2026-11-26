@@ -1,8 +1,7 @@
 """Registrar as chaves de um lote como eventos.
 
 Separado de `impressao.py` porque é a única etapa da impressão que toca no banco:
-assim a impressão continua funcionando com o Postgres desligado, e o `.exe` (D19)
-não leva banco nenhum.
+assim a impressão continua funcionando com o Postgres desligado.
 """
 from __future__ import annotations
 

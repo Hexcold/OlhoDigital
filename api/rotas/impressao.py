@@ -4,8 +4,8 @@ Casca fina sobre `lote_folhas`, onde as regras moram. O PDF sai sempre do
 cabeçalho SALVO, nunca do que veio no pedido: assim o que foi conferido na tela
 é o que vai para a impressora, e o arquivo guarda qual cabeçalho foi usado.
 
-Este módulo não importa banco nem leitura de folha. É ele que vai no `.exe` da
-impressão (D19), e cadastrar as chaves como eventos mora em `cadastro_chaves.py`.
+Este módulo não importa banco nem leitura de folha: é o que a conta de impressão (D18)
+alcança. Cadastrar as chaves como eventos mora em `cadastro_chaves.py`.
 """
 from __future__ import annotations
 
@@ -152,8 +152,8 @@ FORMATO_PACOTE = "olhodigital-pacote"
 @rotas.post("/pacote", response_model=PacoteSaida)
 def abrir_pacote(arquivo: UploadFile = File(...)) -> PacoteSaida:
     """Abre o pacote de impressão de um grupo (D35, fase 3): o modelo, os ajustes por evento e
-    as chaves, exportados pelo sistema completo. É como o PC de impressão (D19), que não tem
-    banco, imprime com o modelo do grupo. Não grava nada: devolve o lote para a tela gerar.
+    as chaves, exportados pela aba Folha do grupo. É como a conta de impressão, que não vê os
+    grupos, imprime com o modelo deles. Não grava nada: devolve o lote para a tela gerar.
     """
     lf = _lote()
     conteudo = arquivo.file.read(LIMITE_PLANILHA_BYTES + 1)

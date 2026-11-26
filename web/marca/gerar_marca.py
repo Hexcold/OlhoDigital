@@ -8,7 +8,7 @@ quadrado" é o marcador ArUco da folha e o pixel do "Digital". Escolhido entre q
 16 px e o mais distinto. É UM caminho com `fill-rule="evenodd"`: olho, íris (furo) e pupila
 (cheia de novo). Fica de uma cor só e funciona sobre qualquer fundo.
 
-O nome sai em CONTORNOS, na Noto Sans que a folha usa (`impressao-windows/fontes`, OFL): um SVG
+O nome sai em CONTORNOS, na Noto Sans que a folha usa (`web/marca/fontes`, OFL): um SVG
 com texto dependeria das fontes de quem abre o arquivo, e a marca sairia diferente em cada lugar.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from fontTools.ttLib import TTFont
 
 RAIZ = Path(__file__).resolve().parents[2]
 SAIDA = RAIZ / "web" / "public" / "marca"
-FONTES = RAIZ / "impressao-windows" / "fontes"
+FONTES = RAIZ / "web" / "marca" / "fontes"
 
 AZUL = "#1e40af"        # marca-700, a barra do topo
 MARINHO = "#172554"     # marca-900
