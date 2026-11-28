@@ -100,3 +100,10 @@ versionados. Por isso os resultados não podem ser reproduzidos só com este rep
 
 Comentários do código citam notas internas de projeto (`A19`, `D08`), que também ficam fora do
 repositório porque mencionam casos reais das folhas.
+
+## Licença
+
+O código é distribuído sob a licença MIT; ver [`LICENSE`](LICENSE). Arquivos de terceiros incluídos no
+repositório mantêm os termos dos seus autores: as fontes Noto Sans de `web/marca/fontes/`, sob a SIL
+Open Font License (`OFL.txt` na mesma pasta), e o conjunto de treino do MNIST
+(`experimento-imagem/modelo/train-*-ubyte.gz`), de LeCun, Cortes e Burges.
